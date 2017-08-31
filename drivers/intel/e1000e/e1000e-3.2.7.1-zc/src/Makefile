@@ -122,7 +122,7 @@ ifeq (,$(CC))
 endif
 
 # Set no-pie for compilers that enable pie by default
- test_nopie = $(shell echo "" | $(CC) -fsyntax-only -no-pie -xc - && echo 1)
+# test_nopie = $(shell echo "" | $(CC) -fsyntax-only -no-pie -xc - && echo 1)
 ifneq (,$(test_nopie))
   EXTRA_CFLAGS += -no-pie
 endif
