@@ -48,8 +48,10 @@
 
 #ifdef CONFIG_NET_RX_BUSY_POLL
 #include <net/busy_poll.h>
+#ifdef HAVE_NDO_BUSY_POLL
 #define BP_EXTENDED_STATS
 #endif
+#endif /* CONFIG_NET_RX_BUSY_POLL */
 
 #ifdef HAVE_SCTP
 #include <linux/sctp.h>
@@ -93,17 +95,6 @@
 #define IXGBE_MAX_RXD			4096
 #define IXGBE_MIN_RXD			64
 
-#ifdef HAVE_PF_RING
-#undef IXGBE_MAX_RXD
-#undef IXGBE_MAX_TXD
-#define IXGBE_MAX_RXD			32768
-#define IXGBE_MAX_TXD			32768
-#undef IXGBE_DEFAULT_RXD
-#undef IXGBE_DEFAULT_TXD
-#define IXGBE_DEFAULT_RXD		8192
-#define IXGBE_DEFAULT_TXD		8192
-#endif
-
 #define IXGBE_ETH_P_LLDP		0x88CC
 
 /* flow control */
@@ -117,16 +108,68 @@
 
 /* Supported Rx Buffer Sizes */
 #define IXGBE_RXBUFFER_256       256  /* Used for skb receive header */
+#define IXGBE_RXBUFFER_1536	1536
 #define IXGBE_RXBUFFER_2K	2048
 #define IXGBE_RXBUFFER_3K	3072
 #define IXGBE_RXBUFFER_4K	4096
 #ifdef CONFIG_IXGBE_DISABLE_PACKET_SPLIT
-#define IXGBE_RXBUFFER_1536	1536
 #define IXGBE_RXBUFFER_7K	7168
 #define IXGBE_RXBUFFER_8K	8192
 #define IXGBE_RXBUFFER_15K	15360
 #endif /* CONFIG_IXGBE_DISABLE_PACKET_SPLIT */
 #define IXGBE_MAX_RXBUFFER	16384  /* largest size for single descriptor */
+
+/* Attempt to maximize the headroom available for incoming frames.  We
+ * use a 2K buffer for receives and need 1536/1534 to store the data for
+ * the frame.  This leaves us with 512 bytes of room.  From that we need
+ * to deduct the space needed for the shared info and the padding needed
+ * to IP align the frame.
+ *
+ * Note: For cache line sizes 256 or larger this value is going to end
+ *	 up negative.  In these cases we should fall back to the 3K
+ *	 buffers.
+ */
+#if (PAGE_SIZE < 8192)
+#define IXGBE_MAX_2K_FRAME_BUILD_SKB (IXGBE_RXBUFFER_1536 - NET_IP_ALIGN)
+#define IXGBE_2K_TOO_SMALL_WITH_PADDING \
+((NET_SKB_PAD + IXGBE_RXBUFFER_1536) > SKB_WITH_OVERHEAD(IXGBE_RXBUFFER_2K))
+
+static inline int ixgbe_compute_pad(int rx_buf_len)
+{
+	int page_size, pad_size;
+
+	page_size = ALIGN(rx_buf_len, PAGE_SIZE / 2);
+	pad_size = SKB_WITH_OVERHEAD(page_size) - rx_buf_len;
+
+	return pad_size;
+}
+
+static inline int ixgbe_skb_pad(void)
+{
+	int rx_buf_len;
+
+	/* If a 2K buffer cannot handle a standard Ethernet frame then
+	 * optimize padding for a 3K buffer instead of a 1.5K buffer.
+	 *
+	 * For a 3K buffer we need to add enough padding to allow for
+	 * tailroom due to NET_IP_ALIGN possibly shifting us out of
+	 * cache-line alignment.
+	 */
+	if (IXGBE_2K_TOO_SMALL_WITH_PADDING)
+		rx_buf_len = IXGBE_RXBUFFER_3K + SKB_DATA_ALIGN(NET_IP_ALIGN);
+	else
+		rx_buf_len = IXGBE_RXBUFFER_1536;
+
+	/* if needed make room for NET_IP_ALIGN */
+	rx_buf_len -= NET_IP_ALIGN;
+
+	return ixgbe_compute_pad(rx_buf_len);
+}
+
+#define IXGBE_SKB_PAD	ixgbe_skb_pad()
+#else
+#define IXGBE_SKB_PAD	(NET_SKB_PAD + NET_IP_ALIGN)
+#endif
 
 /*
  * NOTE: netdev_alloc_skb reserves up to 64 bytes, NET_IP_ALIGN means we
@@ -143,14 +186,19 @@
 /* How many Rx Buffers do we bundle into one write to the hardware ? */
 #define IXGBE_RX_BUFFER_WRITE	16	/* Must be power of 2 */
 
+#ifdef HAVE_STRUCT_DMA_ATTRS
+#define IXGBE_RX_DMA_ATTR NULL
+#else
+#define IXGBE_RX_DMA_ATTR \
+	(DMA_ATTR_SKIP_CPU_SYNC | DMA_ATTR_WEAK_ORDERING)
+#endif
+
 /* assume the kernel supports 8021p to avoid stripping vlan tags */
 #ifdef IXGBE_DISABLE_8021P_SUPPORT
 #ifndef HAVE_8021P_SUPPORT
 #define HAVE_8021P_SUPPORT
 #endif
 #endif /* IXGBE_DISABLE_8021P_SUPPORT */
-
-#define IXGBE_PRIV_FLAGS_FD_ATR BIT(0)
 
 enum ixgbe_tx_flags {
 	/* cmd_type flags */
@@ -212,13 +260,6 @@ enum ixgbe_tx_flags {
 		counter |= current_counter;				 \
 	}
 
-#ifdef HAVE_PF_RING
-typedef struct {
-	u32 sec, nsec;
-	u8 status;
-} silicom_ts_t;
-#endif
-
 struct vf_stats {
 	u64 gprc;
 	u64 gorc;
@@ -246,12 +287,6 @@ struct vf_data_storage {
 	u8 trusted;
 	int xcast_mode;
 	unsigned int vf_api;
-};
-
-enum ixgbevf_xcast_modes {
-	IXGBEVF_XCAST_MODE_NONE = 0,
-	IXGBEVF_XCAST_MODE_MULTI,
-	IXGBEVF_XCAST_MODE_ALLMULTI,
 };
 
 struct vf_macvlans {
@@ -294,7 +329,12 @@ struct ixgbe_rx_buffer {
 	dma_addr_t dma;
 #ifndef CONFIG_IXGBE_DISABLE_PACKET_SPLIT
 	struct page *page;
-	unsigned int page_offset;
+#if (BITS_PER_LONG > 32) || (PAGE_SIZE >= 65536)
+	__u32 page_offset;
+#else
+	__u16 page_offset;
+#endif
+	__u16 pagecnt_bias;
 #endif
 };
 
@@ -325,17 +365,25 @@ struct ixgbe_rx_queue_stats {
 
 #define IXGBE_TS_HDR_LEN 8
 enum ixgbe_ring_state_t {
-	__IXGBE_TX_FDIR_INIT_DONE,
-	__IXGBE_TX_XPS_INIT_DONE,
-	__IXGBE_TX_DETECT_HANG,
-	__IXGBE_HANG_CHECK_ARMED,
+#ifndef CONFIG_IXGBE_DISABLE_PACKET_SPLIT
+	__IXGBE_RX_3K_BUFFER,
+	__IXGBE_RX_BUILD_SKB_ENABLED,
+#endif
 	__IXGBE_RX_RSC_ENABLED,
 	__IXGBE_RX_CSUM_UDP_ZERO_ERR,
 #if IS_ENABLED(CONFIG_FCOE)
 	__IXGBE_RX_FCOE,
 #endif
+	__IXGBE_TX_FDIR_INIT_DONE,
+	__IXGBE_TX_XPS_INIT_DONE,
+	__IXGBE_TX_DETECT_HANG,
+	__IXGBE_HANG_CHECK_ARMED,
 };
 
+#ifndef CONFIG_IXGBE_DISABLE_PACKET_SPLIT
+#define ring_uses_build_skb(ring) \
+	test_bit(__IXGBE_RX_BUILD_SKB_ENABLED, &(ring)->state)
+#endif
 #define check_for_tx_hang(ring) \
 	test_bit(__IXGBE_TX_DETECT_HANG, &(ring)->state)
 #define set_check_for_tx_hang(ring) \
@@ -403,18 +451,6 @@ struct ixgbe_ring {
 		struct ixgbe_tx_queue_stats tx_stats;
 		struct ixgbe_rx_queue_stats rx_stats;
 	};
-#ifdef HAVE_PF_RING
-	struct {
-		atomic_t queue_in_use;
-    
-		union {
-			struct {
-				wait_queue_head_t packet_waitqueue;
-				u8 interrupt_received, interrupt_enabled;
-			} rx;
-		} rx_tx;
-	} pfring_zc;
-#endif
 } ____cacheline_internodealigned_in_smp;
 
 enum ixgbe_ring_f_enum {
@@ -463,10 +499,11 @@ static inline unsigned int ixgbe_rx_bufsz(struct ixgbe_ring __maybe_unused *ring
 #if MAX_SKB_FRAGS < 8
 	return ALIGN(IXGBE_MAX_RXBUFFER / MAX_SKB_FRAGS, 1024);
 #else
-#if IS_ENABLED(CONFIG_FCOE)
-	if (test_bit(__IXGBE_RX_FCOE, &ring->state))
-		return (PAGE_SIZE < 8192) ? IXGBE_RXBUFFER_4K :
-					    IXGBE_RXBUFFER_3K;
+	if (test_bit(__IXGBE_RX_3K_BUFFER, &ring->state))
+		return IXGBE_RXBUFFER_3K;
+#if (PAGE_SIZE < 8192)
+	if (ring_uses_build_skb(ring))
+		return IXGBE_MAX_2K_FRAME_BUILD_SKB;
 #endif
 	return IXGBE_RXBUFFER_2K;
 #endif
@@ -474,16 +511,15 @@ static inline unsigned int ixgbe_rx_bufsz(struct ixgbe_ring __maybe_unused *ring
 
 static inline unsigned int ixgbe_rx_pg_order(struct ixgbe_ring __maybe_unused *ring)
 {
-#if IS_ENABLED(CONFIG_FCOE)
-	if (test_bit(__IXGBE_RX_FCOE, &ring->state))
-		return (PAGE_SIZE < 8192) ? 1 : 0;
+#if (PAGE_SIZE < 8192)
+	if (test_bit(__IXGBE_RX_3K_BUFFER, &ring->state))
+		return 1;
 #endif
 	return 0;
 }
 #define ixgbe_rx_pg_size(_ring) (PAGE_SIZE << ixgbe_rx_pg_order(_ring))
 
-#endif /* CONFIG_IXGBE_DISABLE_PACKET_SPLIT */
-
+#endif
 struct ixgbe_ring_container {
 	struct ixgbe_ring *ring;	/* pointer to linked list of rings */
 	unsigned int total_bytes;	/* total bytes processed this int */
@@ -525,15 +561,15 @@ struct ixgbe_q_vector {
 	char name[IFNAMSIZ + 9];
 	bool netpoll_rx;
 
-#ifdef CONFIG_NET_RX_BUSY_POLL
+#ifdef HAVE_NDO_BUSY_POLL
 	atomic_t state;
-#endif  /* CONFIG_NET_RX_BUSY_POLL */
+#endif  /* HAVE_NDO_BUSY_POLL */
 
 	/* for dynamic allocation of rings associated with this q_vector */
 	struct ixgbe_ring ring[0] ____cacheline_internodealigned_in_smp;
 };
 
-#ifdef CONFIG_NET_RX_BUSY_POLL
+#ifdef HAVE_NDO_BUSY_POLL
 enum ixgbe_qv_state_t {
 	IXGBE_QV_STATE_IDLE = 0,
 	IXGBE_QV_STATE_NAPI,
@@ -609,7 +645,7 @@ static inline bool ixgbe_qv_disable(struct ixgbe_q_vector *q_vector)
 	return rc == IXGBE_QV_STATE_IDLE;
 }
 
-#endif /* CONFIG_NET_RX_BUSY_POLL */
+#endif /* HAVE_NDO_BUSY_POLL */
 #ifdef IXGBE_HWMON
 
 #define IXGBE_HWMON_TYPE_LOC		0
@@ -800,6 +836,7 @@ struct ixgbe_adapter {
 #define IXGBE_FLAG2_UDP_TUN_REREG_NEEDED	(u32)(1 << 16)
 #define IXGBE_FLAG2_PHY_INTERRUPT		(u32)(1 << 17)
 #define IXGBE_FLAG2_VLAN_PROMISC		(u32)(1 << 18)
+#define IXGBE_FLAG2_RX_LEGACY			(u32)(1 << 19)
 
 	/* Tx fast path data */
 	int num_tx_queues;
@@ -936,6 +973,7 @@ struct ixgbe_adapter {
 	struct timecounter hw_tc;
 	u32 base_incval;
 	u32 tx_hwtstamp_timeouts;
+	u32 tx_hwtstamp_skipped;
 	u32 rx_hwtstamp_cleared;
 	void (*ptp_setup_sdp) (struct ixgbe_adapter *);
 #endif /* HAVE_PTP_1588_CLOCK */
@@ -978,7 +1016,7 @@ struct ixgbe_adapter {
 	u8 rss_indir_tbl[IXGBE_MAX_RETA_ENTRIES];
 
 #define IXGBE_RSS_KEY_SIZE     40  /* size of RSS Hash Key in bytes */
-	u32 rss_key[IXGBE_RSS_KEY_SIZE / sizeof(u32)];
+	u32 *rss_key;
 
 #ifdef HAVE_TX_MQ
 #ifndef HAVE_NETDEV_SELECT_QUEUE
@@ -986,11 +1024,6 @@ struct ixgbe_adapter {
 #endif
 #endif
 	bool need_crosstalk_fix;
-#ifdef HAVE_PF_RING
-	struct {
-		atomic_t usage_counter;
-	} pfring_zc;
-#endif
 };
 
 static inline u8 ixgbe_max_rss_indices(struct ixgbe_adapter *adapter)
@@ -1016,7 +1049,7 @@ struct ixgbe_fdir_filter {
 	struct  hlist_node fdir_node;
 	union ixgbe_atr_input filter;
 	u16 sw_idx;
-	u16 action;
+	u64 action;
 };
 
 enum ixgbe_state_t {
@@ -1066,7 +1099,7 @@ int ixgbe_procfs_topdir_init(void);
 void ixgbe_procfs_topdir_exit(void);
 #endif /* IXGBE_PROCFS */
 
-extern struct dcbnl_rtnl_ops dcbnl_ops;
+extern struct dcbnl_rtnl_ops ixgbe_dcbnl_ops;
 int ixgbe_copy_dcb_cfg(struct ixgbe_adapter *adapter, int tc_max);
 
 u8 ixgbe_dcb_txq_to_tc(struct ixgbe_adapter *adapter, u8 index);
@@ -1190,8 +1223,6 @@ s32 ixgbe_dcb_hw_ets(struct ixgbe_hw *hw, struct ieee_ets *ets, int max_frame);
 bool ixgbe_wol_supported(struct ixgbe_adapter *adapter, u16 device_id,
 			 u16 subdevice_id);
 void ixgbe_clean_rx_ring(struct ixgbe_ring *rx_ring);
-int ixgbe_get_settings(struct net_device *netdev,
-			      struct ethtool_cmd *ecmd);
 int ixgbe_write_uc_addr_list(struct net_device *netdev, int vfn);
 void ixgbe_full_sync_mac_table(struct ixgbe_adapter *adapter);
 int ixgbe_add_mac_filter(struct ixgbe_adapter *adapter,
@@ -1214,6 +1245,7 @@ void ixgbe_ptp_stop(struct ixgbe_adapter *adapter);
 void ixgbe_ptp_suspend(struct ixgbe_adapter *adapter);
 void ixgbe_ptp_overflow_check(struct ixgbe_adapter *adapter);
 void ixgbe_ptp_rx_hang(struct ixgbe_adapter *adapter);
+void ixgbe_ptp_tx_hang(struct ixgbe_adapter *adapter);
 void ixgbe_ptp_rx_pktstamp(struct ixgbe_q_vector *q_vector,
 				  struct sk_buff *skb);
 void ixgbe_ptp_rx_rgtstamp(struct ixgbe_q_vector *q_vector,
@@ -1248,6 +1280,7 @@ void ixgbe_ptp_check_pps_event(struct ixgbe_adapter *adapter);
 void ixgbe_sriov_reinit(struct ixgbe_adapter *adapter);
 #endif
 u32 ixgbe_rss_indir_tbl_entries(struct ixgbe_adapter *adapter);
+void ixgbe_store_key(struct ixgbe_adapter *adapter);
 void ixgbe_store_reta(struct ixgbe_adapter *adapter);
 
 void ixgbe_set_rx_drop_en(struct ixgbe_adapter *adapter);

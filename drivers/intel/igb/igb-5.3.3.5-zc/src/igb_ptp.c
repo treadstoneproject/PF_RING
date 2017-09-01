@@ -1,7 +1,7 @@
 /*******************************************************************************
 
-  Intel(R) Gigabit Ethernet Linux driver
-  Copyright(c) 2007-2015 Intel Corporation.
+  Intel(R) Gigabit Ethernet Linux Driver
+  Copyright(c) 2007 - 2017 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -30,11 +30,11 @@
 #include "igb.h"
 
 #ifdef HAVE_PTP_1588_CLOCK
-#include <linux/clocksource.h>
 #include <linux/module.h>
 #include <linux/device.h>
 #include <linux/pci.h>
 #include <linux/ptp_classify.h>
+#include <linux/clocksource.h>
 
 #define INCVALUE_MASK		0x7fffffff
 #define ISGN			0x80000000
@@ -93,7 +93,7 @@
  * SYSTIM read access for the 82576
  */
 
-static cycle_t igb_ptp_read_82576(const struct cyclecounter *cc)
+static u64 igb_ptp_read_82576(const struct cyclecounter *cc)
 {
 	struct igb_adapter *igb = container_of(cc, struct igb_adapter, cc);
 	struct e1000_hw *hw = &igb->hw;
@@ -113,7 +113,7 @@ static cycle_t igb_ptp_read_82576(const struct cyclecounter *cc)
  * SYSTIM read access for the 82580
  */
 
-static cycle_t igb_ptp_read_82580(const struct cyclecounter *cc)
+static u64 igb_ptp_read_82580(const struct cyclecounter *cc)
 {
 	struct igb_adapter *igb = container_of(cc, struct igb_adapter, cc);
 	struct e1000_hw *hw = &igb->hw;
@@ -801,37 +801,6 @@ static int igb_ptp_set_timestamp_mode(struct igb_adapter *adapter,
 
 	/* define which PTP packets are time stamped */
 	E1000_WRITE_REG(hw, E1000_TSYNCRXCFG, tsync_rx_cfg);
-
-#ifdef HAVE_PF_RING /* PER PACKET HW TIMESTAMP (ns) */ 
-        if (hw->mac.type >= e1000_82580) {
-		int i, reg_idx;
-		u32 reg;
-
-        	for (i = 0; i < adapter->num_q_vectors; i++) {
-			reg_idx = adapter->q_vector[i]->rx.ring->reg_idx;
-			reg = E1000_READ_REG(hw, E1000_SRRCTL(reg_idx));
-
-        		/* Enable Timestamp Received packet
-			 * Timestamp is placed only in buffers of received packets that meet 
-			 * the criteria defined in the TSYNCRXCTL.Type field, 2-tuple filters 
-			 * or ETQF registers. A 40 bit timestamp generated from the value in 
-			 * SYSTIMH and SYSTIML registers is placed in the receive buffer. */
-			if (tsync_rx_ctl != 0) /* enabling rx ts (Timestamp Reserved bit) */
-				reg |= 0x40000000;
-			else /* disabling rx ts */
-				reg &= ~0x40000000;
-				  
-  			E1000_WRITE_REG(hw, E1000_SRRCTL(reg_idx), reg);
-         
-#if 0
-			printk("[PF_RING] [tsync_tx_ctl=%d][tsync_rx_ctl=%d][rx_queue=%d][TSAUXC=%u][SRRCTL=%08X]\n",
-			       tsync_tx_ctl, tsync_rx_ctl, reg_idx,
-			       E1000_READ_REG(hw, E1000_TSAUXC),
-			       E1000_READ_REG(hw, E1000_SRRCTL(reg_idx)));
-#endif
-		}
-        }
-#endif
 
 	/* define ethertype filter for timestamped packets */
 	if (is_l2)

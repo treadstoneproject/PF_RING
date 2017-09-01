@@ -1,6 +1,6 @@
 Name: i40e
-Summary: Intel(R) Ethernet Connection XL710 Linux Driver
-Version: 1.3.49
+Summary: Intel(R) 40-10 Gigabit Ethernet Connection Network Driver
+Version: 2.1.26
 Release: 1
 Source: %{name}-%{version}.tar.gz
 Vendor: Intel Corporation
@@ -23,7 +23,7 @@ BuildRoot: %{_tmppath}/%{name}-%{version}-root
 Requires: kernel, fileutils, findutils, gawk, bash
 
 %description
-This package contains the Linux driver for the Intel(R) Ethernet Connection XL710 Family of devices.
+This package contains the Intel(R) 40-10 Gigabit Ethernet Connection Network Driver.
 
 %prep
 %setup
@@ -33,7 +33,7 @@ make -C src clean
 make -C src
 
 %install
-make -C src INSTALL_MOD_PATH=%{buildroot} MANDIR=%{_mandir} install
+make -C src INSTALL_MOD_PATH=%{buildroot} MANDIR=%{_mandir} rpm
 # Append .new to driver name to avoid conflict with kernel RPM
 cd %{buildroot}
 find lib -name "i40e.*o" -exec mv {} {}.new \; \
@@ -64,12 +64,12 @@ if [ -d /usr/local/share/%{name} ]; then
 	rm -rf /usr/local/share/%{name}
 fi
 
-# Save old drivers (aka .o and .o.gz)
+# Save old drivers (aka .ko and .ko.gz)
 echo "original pci.ids saved in /usr/local/share/%{name}";
 if [ "%{pcitable}" != "/dev/null" ]; then
 	echo "original pcitable saved in /usr/local/share/%{name}";
 fi
-for k in $(sed 's/\/lib\/modules\/\([0-9a-zA-Z_\.\-]*\).*/\1/' $FL) ; 
+for k in $(sed 's#/lib/modules/\([0-9a-zA-Z.+_-]*\).*$#\1#' $FL) ;
 do
 	d_drivers=/lib/modules/$k
 	d_usr=/usr/local/share/%{name}/$k
@@ -86,11 +86,11 @@ done
 
 # Add driver link
 for f in $(sed 's/\.new$//' $FL) ; do
-	ln -f $f.new $f 
+	ln -f $f.new $f
 done
 
 # Check if kernel version rpm was built on IS the same as running kernel
-BK_LIST=$(sed 's/\/lib\/modules\/\([0-9a-zA-Z_\.\-]*\).*/\1/' $FL)
+BK_LIST=$(sed 's#/lib/modules/\([0-9a-zA-Z.+_-]*\).*$#\1#' $FL) ;
 MATCH=no
 for i in $BK_LIST
 do
@@ -373,6 +373,37 @@ mv -f $LD/pcitable.new %{pcitable}
 fi
 
 uname -r | grep BOOT || /sbin/depmod -a > /dev/null 2>&1 || true
+
+echo "Updating initrd..."
+# Decide which initrd update utility to use.
+# Default is dracut but we'll try mkinitrd if that's not found.
+which dracut >/dev/null 2>&1
+if [ $? -eq 0 ]; then
+	echo "Using dracut to update initrd..."
+	initrd_cmd="dracut --force"
+else
+	which mkinitrd >/dev/null 2>&1
+	if [ $? -eq 0 ]; then
+		echo "Using mkinitrd to update initrd..."
+		initrd_cmd="mkinitrd"
+	else
+		echo "Unable to find initrd update utility."
+		echo "You must update your initrd for changes to take place."
+		exit -1
+	fi
+fi
+
+# Do the initrd update and report success or failure.
+if [ "$initrd_cmd" != "" ]; then
+	eval "$initrd_cmd"
+	if [ $? -ne 0 ]; then
+		echo "Failed to update initrd."
+		echo "You must update your initrd for changes to take place."
+		exit -1
+	else
+		echo "Successfully updated initrd."
+	fi
+fi
 
 %preun
 # If doing RPM un-install

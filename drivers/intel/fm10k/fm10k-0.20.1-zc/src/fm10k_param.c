@@ -1,5 +1,5 @@
 /* Intel(R) Ethernet Switch Host Interface Driver
- * Copyright(c) 2013 - 2016 Intel Corporation.
+ * Copyright(c) 2013 - 2017 Intel Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -260,7 +260,7 @@ int fm10k_check_options(struct fm10k_intfc *interface)
 		}
 
 		if (ies)
-			interface->flags |= FM10K_FLAG_IES_MODE;
+			set_bit(FM10K_FLAG_IES_MODE, interface->flags);
 	}
 
 	ifc++;

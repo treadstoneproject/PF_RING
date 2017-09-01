@@ -1,6 +1,6 @@
 Name: fm10k
 Summary: Intel(R) Ethernet Switch Host Interface Driver
-Version: 0.20.1
+Version: 0.22.4
 Release: 1
 Source: %{name}-%{version}.tar.gz
 Vendor: Intel Corporation

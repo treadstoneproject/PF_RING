@@ -1,5 +1,5 @@
 /* Intel PRO/1000 Linux driver
- * Copyright(c) 1999 - 2015 Intel Corporation.
+ * Copyright(c) 1999 - 2017 Intel Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -1424,7 +1424,9 @@ void e1000e_put_hw_semaphore(struct e1000_hw *hw)
 	u32 swsm;
 
 	swsm = er32(SWSM);
+
 	swsm &= ~(E1000_SWSM_SMBI | E1000_SWSM_SWESMBI);
+
 	ew32(SWSM, swsm);
 }
 

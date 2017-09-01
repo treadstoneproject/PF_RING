@@ -33,8 +33,11 @@ EXTRA_CFLAGS += -I${PWD} ${GITDEF}
 HERE=${PWD}
 
 # set the install path
-INSTDIR := $(DESTDIR)/lib/modules/$(BUILD_KERNEL)/kernel/net/pf_ring
-TARGETDIR := $(DESTDIR)/usr/src/$(BUILD_KERNEL)/include/linux/
+#INSTDIR := $(DESTDIR)/lib/modules/$(BUILD_KERNEL)/kernel/net/pf_ring
+#TARGETDIR := $(DESTDIR)/usr/src/$(BUILD_KERNEL)/include/linux/
+INSTDIR :=   /usr/local/lib/modules/kernel/net/pf_ring
+TARGETDIR := /usr/local/include/linux/
+
 
 all: Makefile pf_ring.c linux/pf_ring.h
 #	@if test "$(USER)" = "root"; then \

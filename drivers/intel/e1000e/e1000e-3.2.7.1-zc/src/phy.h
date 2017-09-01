@@ -1,5 +1,5 @@
 /* Intel PRO/1000 Linux driver
- * Copyright(c) 1999 - 2015 Intel Corporation.
+ * Copyright(c) 1999 - 2017 Intel Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -148,6 +148,12 @@ s32 e1000_get_cable_length_82577(struct e1000_hw *hw);
 /* I82577 PHY Diagnostics Status */
 #define I82577_DSTATUS_CABLE_LENGTH		0x03FC
 #define I82577_DSTATUS_CABLE_LENGTH_SHIFT	2
+
+#define E1000_MPHY_DIS_ACCESS		0x80000000	/* disable_access bit */
+#define E1000_MPHY_ENA_ACCESS		0x40000000	/* enable_access bit */
+#define E1000_MPHY_BUSY			0x00010000	/* busy bit */
+#define E1000_MPHY_ADDRESS_FNC_OVERRIDE	0x20000000	/* fnc_override bit */
+#define E1000_MPHY_ADDRESS_MASK		0x0000FFFF	/* address mask */
 
 /* BM PHY Copper Specific Control 1 */
 #define BM_CS_CTRL1			16

@@ -196,6 +196,7 @@ s32 ixgbe_reset_hw_X540(struct ixgbe_hw *hw)
 {
 	s32 status;
 	u32 ctrl, i;
+	u32 swfw_mask = hw->phy.phy_semaphore_mask;
 
 	DEBUGFUNC("ixgbe_reset_hw_X540");
 
@@ -208,10 +209,17 @@ s32 ixgbe_reset_hw_X540(struct ixgbe_hw *hw)
 	ixgbe_clear_tx_pending(hw);
 
 mac_reset_top:
+	status = hw->mac.ops.acquire_swfw_sync(hw, swfw_mask);
+	if (status != IXGBE_SUCCESS) {
+		ERROR_REPORT2(IXGBE_ERROR_CAUTION,
+			"semaphore failed with %d", status);
+		return IXGBE_ERR_SWFW_SYNC;
+	}
 	ctrl = IXGBE_CTRL_RST;
 	ctrl |= IXGBE_READ_REG(hw, IXGBE_CTRL);
 	IXGBE_WRITE_REG(hw, IXGBE_CTRL, ctrl);
 	IXGBE_WRITE_FLUSH(hw);
+	hw->mac.ops.release_swfw_sync(hw, swfw_mask);
 
 	/* Poll for reset bit to self-clear indicating reset is complete */
 	for (i = 0; i < 10; i++) {
@@ -309,9 +317,9 @@ out:
  *
  *  Determines physical layer capabilities of the current configuration.
  **/
-u32 ixgbe_get_supported_physical_layer_X540(struct ixgbe_hw *hw)
+u64 ixgbe_get_supported_physical_layer_X540(struct ixgbe_hw *hw)
 {
-	u32 physical_layer = IXGBE_PHYSICAL_LAYER_UNKNOWN;
+	u64 physical_layer = IXGBE_PHYSICAL_LAYER_UNKNOWN;
 	u16 ext_ability = 0;
 
 	DEBUGFUNC("ixgbe_get_supported_physical_layer_X540");
@@ -763,8 +771,10 @@ s32 ixgbe_acquire_swfw_sync_X540(struct ixgbe_hw *hw, u32 mask)
 		/* SW NVM semaphore bit is used for access to all
 		 * SW_FW_SYNC bits (not just NVM)
 		 */
-		if (ixgbe_get_swfw_sync_semaphore(hw))
+		if (ixgbe_get_swfw_sync_semaphore(hw)) {
+			DEBUGOUT("Failed to get NVM access and register semaphore, returning IXGBE_ERR_SWFW_SYNC\n");
 			return IXGBE_ERR_SWFW_SYNC;
+		}
 
 		swfw_sync = IXGBE_READ_REG(hw, IXGBE_SWFW_SYNC_BY_MAC(hw));
 		if (!(swfw_sync & (fwmask | swmask | hwmask))) {
@@ -782,20 +792,15 @@ s32 ixgbe_acquire_swfw_sync_X540(struct ixgbe_hw *hw, u32 mask)
 		msec_delay(5);
 	}
 
-	/* Failed to get SW only semaphore */
-	if (swmask == IXGBE_GSSR_SW_MNG_SM) {
-		ERROR_REPORT1(IXGBE_ERROR_POLLING,
-			     "Failed to get SW only semaphore");
-		return IXGBE_ERR_SWFW_SYNC;
-	}
-
 	/* If the resource is not released by the FW/HW the SW can assume that
 	 * the FW/HW malfunctions. In that case the SW should set the SW bit(s)
 	 * of the requested resource(s) while ignoring the corresponding FW/HW
 	 * bits in the SW_FW_SYNC register.
 	 */
-	if (ixgbe_get_swfw_sync_semaphore(hw))
+	if (ixgbe_get_swfw_sync_semaphore(hw)) {
+		DEBUGOUT("Failed to get NVM sempahore and register semaphore while forcefully ignoring FW sempahore bit(s) and setting SW semaphore bit(s), returning IXGBE_ERR_SWFW_SYNC\n");
 		return IXGBE_ERR_SWFW_SYNC;
+	}
 	swfw_sync = IXGBE_READ_REG(hw, IXGBE_SWFW_SYNC_BY_MAC(hw));
 	if (swfw_sync & (fwmask | hwmask)) {
 		swfw_sync |= swmask;
@@ -811,15 +816,18 @@ s32 ixgbe_acquire_swfw_sync_X540(struct ixgbe_hw *hw, u32 mask)
 	 */
 	if (swfw_sync & swmask) {
 		u32 rmask = IXGBE_GSSR_EEP_SM | IXGBE_GSSR_PHY0_SM |
-			    IXGBE_GSSR_PHY1_SM | IXGBE_GSSR_MAC_CSR_SM;
+			    IXGBE_GSSR_PHY1_SM | IXGBE_GSSR_MAC_CSR_SM |
+			    IXGBE_GSSR_SW_MNG_SM;
 
 		if (swi2c_mask)
 			rmask |= IXGBE_GSSR_I2C_MASK;
 		ixgbe_release_swfw_sync_X540(hw, rmask);
 		ixgbe_release_swfw_sync_semaphore(hw);
+		DEBUGOUT("Resource not released by other SW, returning IXGBE_ERR_SWFW_SYNC\n");
 		return IXGBE_ERR_SWFW_SYNC;
 	}
 	ixgbe_release_swfw_sync_semaphore(hw);
+	DEBUGOUT("Returning error IXGBE_ERR_SWFW_SYNC\n");
 
 	return IXGBE_ERR_SWFW_SYNC;
 }
@@ -943,14 +951,25 @@ STATIC void ixgbe_release_swfw_sync_semaphore(struct ixgbe_hw *hw)
  **/
 void ixgbe_init_swfw_sync_X540(struct ixgbe_hw *hw)
 {
+	u32 rmask;
+
 	/* First try to grab the semaphore but we don't need to bother
-	 * looking to see whether we got the lock or  not since we do
+	 * looking to see whether we got the lock or not since we do
 	 * the same thing regardless of whether we got the lock or not.
 	 * We got the lock - we release it.
 	 * We timeout trying to get the lock - we force its release.
 	 */
 	ixgbe_get_swfw_sync_semaphore(hw);
 	ixgbe_release_swfw_sync_semaphore(hw);
+
+	/* Acquire and release all software resources. */
+	rmask = IXGBE_GSSR_EEP_SM | IXGBE_GSSR_PHY0_SM |
+		IXGBE_GSSR_PHY1_SM | IXGBE_GSSR_MAC_CSR_SM |
+		IXGBE_GSSR_SW_MNG_SM;
+
+	rmask |= IXGBE_GSSR_I2C_MASK;
+	ixgbe_acquire_swfw_sync_X540(hw, rmask);
+	ixgbe_release_swfw_sync_X540(hw, rmask);
 }
 
 /**

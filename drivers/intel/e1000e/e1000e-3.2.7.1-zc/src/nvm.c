@@ -1,5 +1,5 @@
 /* Intel PRO/1000 Linux driver
- * Copyright(c) 1999 - 2015 Intel Corporation.
+ * Copyright(c) 1999 - 2017 Intel Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -110,6 +110,7 @@ static u16 e1000_shift_in_eec_bits(struct e1000_hw *hw, u16 count)
 	u16 data;
 
 	eecd = er32(EECD);
+
 	eecd &= ~(E1000_EECD_DO | E1000_EECD_DI);
 	data = 0;
 
@@ -172,6 +173,7 @@ s32 e1000e_acquire_nvm(struct e1000_hw *hw)
 
 	ew32(EECD, eecd | E1000_EECD_REQ);
 	eecd = er32(EECD);
+
 	while (timeout) {
 		if (eecd & E1000_EECD_GNT)
 			break;

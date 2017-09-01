@@ -1,7 +1,7 @@
 /*******************************************************************************
 
-  Intel(R) Gigabit Ethernet Linux driver
-  Copyright(c) 2007-2015 Intel Corporation.
+  Intel(R) Gigabit Ethernet Linux Driver
+  Copyright(c) 2007 - 2017 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -859,13 +859,6 @@ static int igb_set_ringparam(struct net_device *netdev,
 	int i, err = 0;
 	u16 new_rx_count, new_tx_count;
 
-#ifdef HAVE_PF_RING
-	if(atomic_read(&adapter->pfring_zc.usage_counter) > 0) {
-		printk("[PF_RING-ZC] Interface %s is in use, unable to set ring params!\n", netdev->name);
-		return -EBUSY;
-	}
-#endif
-
 	if ((ring->rx_mini_pending) || (ring->rx_jumbo_pending))
 		return -EINVAL;
 
@@ -1441,7 +1434,6 @@ static int igb_setup_loopback_test(struct igb_adapter *adapter)
 		    (hw->device_id == E1000_DEV_ID_DH89XXCC_SFP) ||
 		    (hw->device_id == E1000_DEV_ID_I354_SGMII) ||
 		    (hw->device_id == E1000_DEV_ID_I354_BACKPLANE_2_5GBPS)) {
-
 			/* Enable DH89xxCC MPHY for near end loopback */
 			reg = E1000_READ_REG(hw, E1000_MPHY_ADDR_CTL);
 			reg = (reg & E1000_MPHY_ADDR_CTL_OFFSET_MASK) |
@@ -1794,7 +1786,7 @@ static void igb_diag_test(struct net_device *netdev,
 
 		if (if_running)
 			/* indicate we're in test mode */
-			dev_close(netdev);
+			igb_close(netdev);
 		else
 			igb_reset(adapter);
 
@@ -1829,7 +1821,7 @@ static void igb_diag_test(struct net_device *netdev,
 
 		clear_bit(__IGB_TESTING, &adapter->state);
 		if (if_running)
-			dev_open(netdev);
+			igb_open(netdev);
 	} else {
 		dev_info(pci_dev_to_dev(adapter->pdev), "online testing starting\n");
 

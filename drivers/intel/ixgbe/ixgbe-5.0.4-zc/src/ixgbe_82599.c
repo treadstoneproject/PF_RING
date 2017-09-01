@@ -35,14 +35,6 @@
 #define IXGBE_82599_VFT_TBL_SIZE  128
 #define IXGBE_82599_RX_PB_SIZE	  512
 
-#ifdef HAVE_PF_RING
-#include "../../../../../kernel/linux/pf_ring.h"
-
-static unsigned int allow_tap_1g = 0;
-module_param(allow_tap_1g, uint, 0644);
-MODULE_PARM_DESC(allow_tap_1g, "Allow 1Gbit/s TAP disabling atonegotiation on 82599 based adapters");
-#endif
-
 STATIC s32 ixgbe_setup_copper_link_82599(struct ixgbe_hw *hw,
 					 ixgbe_link_speed speed,
 					 bool autoneg_wait_to_complete);
@@ -946,11 +938,7 @@ s32 ixgbe_setup_mac_link_82599(struct ixgbe_hw *hw,
 		if ((speed == IXGBE_LINK_SPEED_1GB_FULL) &&
 		    (pma_pmd_1g == IXGBE_AUTOC_1G_SFI)) {
 			autoc &= ~IXGBE_AUTOC_LMS_MASK;
-#ifdef HAVE_PF_RING
-			if (!allow_tap_1g && autoneg)
-#else
 			if (autoneg || hw->phy.type == ixgbe_phy_qsfp_intel)
-#endif
 				autoc |= IXGBE_AUTOC_LMS_1G_AN;
 			else
 				autoc |= IXGBE_AUTOC_LMS_1G_LINK_NO_AN;
@@ -1740,15 +1728,17 @@ s32 ixgbe_fdir_set_input_mask_82599(struct ixgbe_hw *hw,
 
 	switch (IXGBE_NTOHS(input_mask->formatted.vlan_id) & 0xEFFF) {
 	case 0x0000:
-		/* mask VLAN ID, fall through to mask VLAN priority */
+		/* mask VLAN ID */
 		fdirm |= IXGBE_FDIRM_VLANID;
+		/* fall through */
 	case 0x0FFF:
 		/* mask VLAN priority */
 		fdirm |= IXGBE_FDIRM_VLANP;
 		break;
 	case 0xE000:
-		/* mask VLAN ID only, fall through */
+		/* mask VLAN ID only */
 		fdirm |= IXGBE_FDIRM_VLANID;
+		/* fall through */
 	case 0xEFFF:
 		/* no VLAN fields masked */
 		break;
@@ -1759,8 +1749,9 @@ s32 ixgbe_fdir_set_input_mask_82599(struct ixgbe_hw *hw,
 
 	switch (input_mask->formatted.flex_bytes & 0xFFFF) {
 	case 0x0000:
-		/* Mask Flex Bytes, fall through */
+		/* Mask Flex Bytes */
 		fdirm |= IXGBE_FDIRM_FLEX;
+		/* fall through */
 	case 0xFFFF:
 		break;
 	default:
@@ -2025,6 +2016,7 @@ s32 ixgbe_fdir_add_perfect_filter_82599(struct ixgbe_hw *hw,
 			DEBUGOUT(" Error on src/dst port\n");
 			return IXGBE_ERR_CONFIG;
 		}
+		/* fall through */
 	case IXGBE_ATR_FLOW_TYPE_TCPV4:
 	case IXGBE_ATR_FLOW_TYPE_TUNNELED_TCPV4:
 	case IXGBE_ATR_FLOW_TYPE_UDPV4:
@@ -2049,109 +2041,6 @@ s32 ixgbe_fdir_add_perfect_filter_82599(struct ixgbe_hw *hw,
 	return ixgbe_fdir_write_perfect_filter_82599(hw, input,
 						     soft_id, queue, cloud_mode);
 }
-
-#ifdef HAVE_PF_RING
-#define SET_BIT(value, shift) (value |= (1 << (shift-1)))
-#define IXGBE_FTQF_PROTOCOL_OTHER       0x00000003
-
-/*
-  The 5-tuple filters are configured via the FTQF, SDPQF, L34TIMIR, DAQF, 
-  and SAQF registers, as follows (described by filter):
-
-  * Protocol: Identifies the IP protocol, part of the 5-tuple. Enabled by a bit in the mask field. 
-    Supported protocol fields are TCP, UDP, SCTP or other (neither TCP nor UDP nor SCTP).
-  * Source address: Identifies the IP source address, part of the 5-tuple. Enabled by a bit in the mask field. Only IPv4 addresses are supported.
-  * Destination address: Identifies the IP destination address, part of the 5-tuple. Enabled by a bit in the mask field. Only IPv4 addresses are supported.
-  * Source port: Identifies the TCP/UDP/SCTP source port, part of the 5-tuple. Enabled by a bit in the mask field.
-  * Destination port: Identifies the TCP/UDP/SCTP destination port, part of the 5-tuple queue filters. Enabled by a bit in the mask field.
-  * Queue Enable: Enables the packets routing to queues based on the Rx Queue index of the filter.
-  * Rx Queue: Determines the Rx queue for packets that match this filter.
-  * Pool: Applies only in the virtualized case (while Pool Mask bit = 0b). This field must match one of the pools enabled for this packet in the L2 filters.b
-    In non-virtualized case the Pool Mask bit must be set to 1b.b
-    In the virtualized case, the pool must be defined (Pool Mask = 0b and Pool = valid index). 
-    The Rx Queue field defines the absolute queue index. In case of mirroring or replication, 
-    only the copy of the packet destined to the matched pool in the filter is routed according to the Rx Queue field.
-  * Mask: A 5-bit field that masks each of the fields in the 5-tuple (L4 protocol, IP addresses, TCP/ UDP ports). 
-    The filter is a logical AND of the non-masked 5-tuple fields. If all 5-tuple fields are masked, 
-    the filter is not used for queue routing.
-  * Priority: A 3-bit field that defines one of seven priority levels (001b-111b), with 111b as the highest priority. 
-    Software must insure that a packet never matches two or more filters with the same priority value.
-
-  Note: There are 128 different 5-tuple filter configuration registers sets, with indexes [0] to [127]. 
-        The mapping to a specific Rx queue is done by the Rx Queue field in the L34TIMIR register, 
-        and not by the index of the register set.
-*/
-
-s32 ixgbe_ftqf_add_filter(struct ixgbe_hw *hw, u8 proto, u32 saddr, u16 sport, u32 daddr, u16 dport, u8 rx_queue, u8 filter_id)
-{
-  u32 ftqf;
-  u32 l34t_imir = 0;
-  u8 pool = 0;
-  u8 priority = 1;
-  u8 mask = 0;
-  u8 pool_mask = 1; /* 1 = ignore */
-  int debug = 0;
-
-  if (debug)
-    printk("ixgbe_ftqf_add_filter(proto=%u, %u:%u->%u:%u, queue=%u, filter_id=%u)\n",
-	   proto, saddr, sport, daddr, dport, rx_queue, filter_id);
-  
-  if (filter_id >= 128) /* Filter Id 0..127 */
-    return IXGBE_ERR_CONFIG;
-
-  switch (proto) {
-  case 6: /* TCP */
-    ftqf = IXGBE_FTQF_PROTOCOL_TCP;
-    break;
-  case 17: /* UDP */
-    ftqf = IXGBE_FTQF_PROTOCOL_UDP;
-    break;
-  case 132: /* SCTP */
-    ftqf = IXGBE_FTQF_PROTOCOL_SCTP;
-    break;
-  default:
-    ftqf = IXGBE_FTQF_PROTOCOL_OTHER;
-    SET_BIT(mask, 5);
-  }
-
-  /* Mask bit set to 1 means ignore */
-  if (saddr == 0) SET_BIT(mask, 1);
-  if (daddr == 0) SET_BIT(mask, 2);
-  if (sport == 0) SET_BIT(mask, 3);
-  if (dport == 0) SET_BIT(mask, 4);
-
-  ftqf |= priority << IXGBE_FTQF_PRIORITY_SHIFT;
-  ftqf |= pool << IXGBE_FTQF_POOL_SHIFT;
-  ftqf |= mask << IXGBE_FTQF_5TUPLE_MASK_SHIFT;	
-  if (pool_mask) ftqf |= IXGBE_FTQF_POOL_MASK_EN;
-  ftqf |= IXGBE_FTQF_QUEUE_ENABLE; /* When set, enables filtering of Rx packets by 
-				      the 5-tuple defined in this filter to the
-				      queue indicated in register L34TIMIR */
-	
-  l34t_imir = IXGBE_IMIR_LLI_EN_82599 /* Enable LLI */
-    | IXGBE_IMIR_SIZE_BP_82599 /* Packet size bypass */
-    | IXGBE_IMIR_CTRL_BP_82599 /* Bypass check of control bits (bit 19) */
-    ;
-  l34t_imir |= rx_queue << IXGBE_IMIR_RX_QUEUE_SHIFT_82599;
-	
-  /* I assume IPs are NOT in big endian so I need to convert them */
-  saddr = htonl(saddr), daddr = htonl(daddr);
-  IXGBE_WRITE_REG(hw, IXGBE_SAQF(filter_id), saddr);
-  IXGBE_WRITE_REG(hw, IXGBE_DAQF(filter_id), daddr);
-
-  /* I assume ports are NOT in big endian so I need to convert them */
-  sport = htons(sport), dport = htons(dport);
-  IXGBE_WRITE_REG(hw, IXGBE_SDPQF(filter_id), sport | (dport << 16));
-
-  IXGBE_WRITE_REG(hw, IXGBE_L34T_IMIR(filter_id), l34t_imir);
-  IXGBE_WRITE_REG(hw, IXGBE_FTQF(filter_id), ftqf);
-
-  if (debug) 
-    printk("ixgbe_ftqf_add_filter() [ftqf=%u][l34t_imir=%u]\n", ftqf, l34t_imir);
-
-  return 0;
-}
-#endif
 
 /**
  *  ixgbe_read_analog_reg8_82599 - Reads 8 bit Omer analog register
@@ -2273,9 +2162,9 @@ s32 ixgbe_identify_phy_82599(struct ixgbe_hw *hw)
  *
  *  Determines physical layer capabilities of the current configuration.
  **/
-u32 ixgbe_get_supported_physical_layer_82599(struct ixgbe_hw *hw)
+u64 ixgbe_get_supported_physical_layer_82599(struct ixgbe_hw *hw)
 {
-	u32 physical_layer = IXGBE_PHYSICAL_LAYER_UNKNOWN;
+	u64 physical_layer = IXGBE_PHYSICAL_LAYER_UNKNOWN;
 	u32 autoc = IXGBE_READ_REG(hw, IXGBE_AUTOC);
 	u32 autoc2 = IXGBE_READ_REG(hw, IXGBE_AUTOC2);
 	u32 pma_pmd_10g_serial = autoc2 & IXGBE_AUTOC2_10G_SERIAL_PMA_PMD_MASK;

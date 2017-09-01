@@ -1,5 +1,5 @@
 /* Intel PRO/1000 Linux driver
- * Copyright(c) 1999 - 2015 Intel Corporation.
+ * Copyright(c) 1999 - 2017 Intel Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -91,6 +91,11 @@ struct e1000_hw;
 #define E1000_DEV_ID_PCH_SPT_I219_V		0x1570	/* Sunrise Point PCH */
 #define E1000_DEV_ID_PCH_SPT_I219_LM2		0x15B7	/* Sunrise Point-H PCH */
 #define E1000_DEV_ID_PCH_SPT_I219_V2		0x15B8	/* Sunrise Point-H PCH */
+#define E1000_DEV_ID_PCH_LBG_I219_LM3		0x15B9	/* LEWISBURG PCH */
+#define E1000_DEV_ID_PCH_SPT_I219_LM4		0x15D7
+#define E1000_DEV_ID_PCH_SPT_I219_V4		0x15D8
+#define E1000_DEV_ID_PCH_SPT_I219_LM5		0x15E3
+#define E1000_DEV_ID_PCH_SPT_I219_V5		0x15D6
 
 #define E1000_REVISION_4	4
 
@@ -676,9 +681,13 @@ struct e1000_dev_spec_ich8lan {
 	bool kmrn_lock_loss_workaround_enabled;
 	struct e1000_shadow_ram shadow_ram[E1000_ICH8_SHADOW_RAM_WORDS];
 	bool nvm_k1_enabled;
+	bool disable_k1_off;
 	bool eee_disable;
 	u16 eee_lp_ability;
 	enum e1000_ulp_state ulp_state;
+	bool ulp_capability_disabled;
+	bool during_suspend_flow;
+	bool during_dpg_exit;
 #ifdef DYNAMIC_LTR_SUPPORT
 	u16 lat_enc;
 	u16 max_ltr_enc;

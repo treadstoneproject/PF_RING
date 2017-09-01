@@ -1,7 +1,7 @@
 ################################################################################
 #
 # Intel(R) Ethernet Switch Host Interface Driver
-# Copyright(c) 2013 - 2016 Intel Corporation.
+# Copyright(c) 2013 - 2017 Intel Corporation.
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms and conditions of the GNU General Public License,
@@ -63,37 +63,6 @@ endif
 # fm10k does not support building on kernels older than 2.6.32
 $(call minimum_kver_check,2,6,32)
 
-############################
-# Module Install Directory #
-############################
-
-# Default to using updates/drivers/net/ethernet/intel/ path, since depmod since
-# v3.1 defaults to checking updates folder first, and only checking kernels/
-# and extra afterwards. We use updates instead of kernel/* due to desire to
-# prevent over-writing built-in modules files.
-INSTALL_MOD_DIR ?= updates/drivers/net/ethernet/intel/${DRIVER}
-
-######################
-# Kernel Build Macro #
-######################
-
-# PF_RING
-DEBUG_CFLAGS += -g -DDEBUG
-EXTRA_CFLAGS += -DHAVE_PF_RING ${DEBUG_CFLAGS}
-
-# kernel build function
-# ${1} is the kernel build target
-# ${2] may contain any extra rules to pass directly to the sub-make process
-kernelbuild = ${MAKE} $(if ${GCC_I_SYS},CC:="${GCC_I_SYS}") \
-                      $(if ${EXTRA_CFLAGS},ccflags-y:="${EXTRA_CFLAGS}") \
-                      -C ${KSRC} \
-                      $(if ${KOBJ},O:=${KOBJ}) \
-                      CONFIG_${DRIVER_UPPERCASE}=m \
-                      M:=$(call readlink,.) \
-                      $(if ${INSTALL_MOD_PATH},INSTALL_MOD_PATH:=${INSTALL_MOD_PATH}) \
-                      INSTALL_MOD_DIR:=${INSTALL_MOD_DIR} \
-                      ${2} ${1};
-
 ###############
 # Build rules #
 ###############
@@ -133,13 +102,28 @@ clean:
 
 # Install the modules and manpage
 install: default manfile
-	install -D -m 644 ${DRIVER}.${MANSECTION}.gz ${INSTALL_MOD_PATH}${MANDIR}/man${MANSECTION}/${DRIVER}.${MANSECTION}.gz
-	@$(call kernelbuild,modules_install)
-	$(call cmd_depmod)
+	@echo "Copying manpages..."
+	@install -D -m 644 ${DRIVER}.${MANSECTION}.gz ${INSTALL_MOD_PATH}${MANDIR}/man${MANSECTION}/${DRIVER}.${MANSECTION}.gz
+	@echo "Installing modules..."
+	@+$(call kernelbuild,modules_install)
+	@echo "Running depmod..."
+	@$(call cmd_depmod)
+ifeq (${cmd_initrd},)
+	@echo "Unable to update initrd. You may need to do this manually."
+else
+	@echo "Updating initrd..."
+	-@$(call cmd_initrd)
+endif
 
 uninstall:
 	rm -f ${INSTALL_MOD_PATH}/lib/modules/${KVER}/${INSTALL_MOD_DIR}/${DRIVER}.ko;
 	$(call cmd_depmod)
+ifeq (${cmd_initrd},)
+	@echo "Unable to update initrd. You may need to do this manually."
+else
+	@echo "Updating initrd..."
+	-@$(call cmd_initrd)
+endif
 	if [ -e ${INSTALL_MOD_PATH}${MANDIR}/man${MANSECTION}/${DRIVER}.${MANSECTION}.gz ] ; then \
 		rm -f ${INSTALL_MOD_PATH}${MANDIR}/man${MANSECTION}/${DRIVER}.${MANSECTION}.gz ; \
 	fi;

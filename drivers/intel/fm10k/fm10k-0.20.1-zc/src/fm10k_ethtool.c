@@ -1,5 +1,5 @@
 /* Intel(R) Ethernet Switch Host Interface Driver
- * Copyright(c) 2013 - 2016 Intel Corporation.
+ * Copyright(c) 2013 - 2017 Intel Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -76,6 +76,8 @@ static const struct fm10k_stats fm10k_gstrings_global_stats[] = {
 	FM10K_STAT("mac_rules_used", hw.swapi.mac.used),
 	FM10K_STAT("mac_rules_avail", hw.swapi.mac.avail),
 
+	FM10K_STAT("reset_while_pending", hw.mac.reset_while_pending),
+
 	FM10K_STAT("tx_hang_count", tx_timeout_count),
 };
 
@@ -148,7 +150,7 @@ static const char fm10k_prv_flags[FM10K_PRV_FLAG_LEN][ETH_GSTRING_LEN] = {
 	"ies-tagging",
 };
 
-static void fm10k_add_stat_strings(char **p, const char *prefix,
+static void fm10k_add_stat_strings(u8 **p, const char *prefix,
 				   const struct fm10k_stats stats[],
 				   const unsigned int size)
 {
@@ -164,32 +166,31 @@ static void fm10k_add_stat_strings(char **p, const char *prefix,
 static void fm10k_get_stat_strings(struct net_device *dev, u8 *data)
 {
 	struct fm10k_intfc *interface = netdev_priv(dev);
-	char *p = (char *)data;
 	unsigned int i;
 
-	fm10k_add_stat_strings(&p, "", fm10k_gstrings_net_stats,
+	fm10k_add_stat_strings(&data, "", fm10k_gstrings_net_stats,
 			       FM10K_NETDEV_STATS_LEN);
 
-	fm10k_add_stat_strings(&p, "", fm10k_gstrings_global_stats,
+	fm10k_add_stat_strings(&data, "", fm10k_gstrings_global_stats,
 			       FM10K_GLOBAL_STATS_LEN);
 
-	fm10k_add_stat_strings(&p, "", fm10k_gstrings_mbx_stats,
+	fm10k_add_stat_strings(&data, "", fm10k_gstrings_mbx_stats,
 			       FM10K_MBX_STATS_LEN);
 
 	if (interface->hw.mac.type != fm10k_mac_vf)
-		fm10k_add_stat_strings(&p, "", fm10k_gstrings_pf_stats,
+		fm10k_add_stat_strings(&data, "", fm10k_gstrings_pf_stats,
 				       FM10K_PF_STATS_LEN);
 
 	for (i = 0; i < interface->hw.mac.max_queues; i++) {
 		char prefix[ETH_GSTRING_LEN];
 
 		snprintf(prefix, ETH_GSTRING_LEN, "tx_queue_%u_", i);
-		fm10k_add_stat_strings(&p, prefix,
+		fm10k_add_stat_strings(&data, prefix,
 				       fm10k_gstrings_queue_stats,
 				       FM10K_QUEUE_STATS_LEN);
 
 		snprintf(prefix, ETH_GSTRING_LEN, "rx_queue_%u_", i);
-		fm10k_add_stat_strings(&p, prefix,
+		fm10k_add_stat_strings(&data, prefix,
 				       fm10k_gstrings_queue_stats,
 				       FM10K_QUEUE_STATS_LEN);
 	}
@@ -198,18 +199,16 @@ static void fm10k_get_stat_strings(struct net_device *dev, u8 *data)
 static void fm10k_get_strings(struct net_device *dev,
 			      u32 stringset, u8 *data)
 {
-	char *p = (char *)data;
-
 	switch (stringset) {
 	case ETH_SS_TEST:
-		memcpy(data, *fm10k_gstrings_test,
+		memcpy(data, fm10k_gstrings_test,
 		       FM10K_TEST_LEN * ETH_GSTRING_LEN);
 		break;
 	case ETH_SS_STATS:
 		fm10k_get_stat_strings(dev, data);
 		break;
 	case ETH_SS_PRIV_FLAGS:
-		memcpy(p, fm10k_prv_flags,
+		memcpy(data, fm10k_prv_flags,
 		       FM10K_PRV_FLAG_LEN * ETH_GSTRING_LEN);
 		break;
 	}
@@ -352,27 +351,23 @@ static void fm10k_get_reg_q(struct fm10k_hw *hw, u32 *buff, int i)
 	buff[idx++] = fm10k_read_reg(hw, FM10K_TX_SGLORT(i));
 	buff[idx++] = fm10k_read_reg(hw, FM10K_PFVTCTL(i));
 
-	BUILD_BUG_ON(idx != FM10K_REGS_LEN_Q);
+	BUG_ON(idx != FM10K_REGS_LEN_Q);
 }
 
-/* If function below adds more registers this define needs to be updated */
-#define FM10K_REGS_LEN_VSI (1 + FM10K_RSSRK_SIZE + FM10K_RETA_SIZE)
+/* If function above adds more registers this define needs to be updated */
+#define FM10K_REGS_LEN_VSI 43
 
 static void fm10k_get_reg_vsi(struct fm10k_hw *hw, u32 *buff, int i)
 {
 	int idx = 0, j;
 
 	buff[idx++] = fm10k_read_reg(hw, FM10K_MRQC(i));
-	for (j = 0; j < FM10K_RSSRK_SIZE; j++, idx++)
-		if (idx < FM10K_REGS_LEN_VSI)
-			buff[idx] = fm10k_read_reg(hw, FM10K_RSSRK(i, j));
-	for (j = 0; j < FM10K_RETA_SIZE; j++, idx++)
-		if (idx < FM10K_REGS_LEN_VSI)
-			buff[idx] = fm10k_read_reg(hw, FM10K_RETA(i, j));
+	for (j = 0; j < 10; j++)
+		buff[idx++] = fm10k_read_reg(hw, FM10K_RSSRK(i, j));
+	for (j = 0; j < 32; j++)
+		buff[idx++] = fm10k_read_reg(hw, FM10K_RETA(i, j));
 
-	WARN_ONCE(idx != FM10K_REGS_LEN_VSI,
-		  "Incorrect value for FM10K_REGS_LEN_VSI (expected %d, got %d)\n",
-		  idx, FM10K_REGS_LEN_VSI);
+	BUG_ON(idx != FM10K_REGS_LEN_VSI);
 }
 
 static void fm10k_get_regs(struct net_device *netdev,
@@ -552,13 +547,6 @@ static int fm10k_set_ringparam(struct net_device *netdev,
 	int i, err = 0;
 	u32 new_rx_count, new_tx_count;
 
-#ifdef HAVE_PF_RING
-	if (atomic_read(&interface->pfring_zc.usage_counter) > 0) {
-		printk("[PF_RING-ZC] Interface %s is in use, unable to set ring params!\n", netdev->name);
-		return -EBUSY;
-	}
-#endif
-
 	if ((ring->rx_mini_pending) || (ring->rx_jumbo_pending))
 		return -EINVAL;
 
@@ -576,7 +564,7 @@ static int fm10k_set_ringparam(struct net_device *netdev,
 		return 0;
 	}
 
-	while (test_and_set_bit(__FM10K_RESETTING, &interface->state))
+	while (test_and_set_bit(__FM10K_RESETTING, interface->state))
 		usleep_range(1000, 2000);
 
 	if (!netif_running(interface->netdev)) {
@@ -662,7 +650,7 @@ err_setup:
 	fm10k_up(interface);
 	vfree(temp_ring);
 clear_reset:
-	clear_bit(__FM10K_RESETTING, &interface->state);
+	clear_bit(__FM10K_RESETTING, interface->state);
 	return err;
 }
 
@@ -730,7 +718,8 @@ static int fm10k_get_rss_hash_opts(struct fm10k_intfc *interface,
 		cmd->data |= RXH_L4_B_0_1 | RXH_L4_B_2_3;
 		/* fall through */
 	case UDP_V4_FLOW:
-		if (interface->flags & FM10K_FLAG_RSS_FIELD_IPV4_UDP)
+		if (test_bit(FM10K_FLAG_RSS_FIELD_IPV4_UDP,
+			     interface->flags))
 			cmd->data |= RXH_L4_B_0_1 | RXH_L4_B_2_3;
 		/* fall through */
 	case SCTP_V4_FLOW:
@@ -746,7 +735,8 @@ static int fm10k_get_rss_hash_opts(struct fm10k_intfc *interface,
 		cmd->data |= RXH_IP_SRC | RXH_IP_DST;
 		break;
 	case UDP_V6_FLOW:
-		if (interface->flags & FM10K_FLAG_RSS_FIELD_IPV6_UDP)
+		if (test_bit(FM10K_FLAG_RSS_FIELD_IPV6_UDP,
+			     interface->flags))
 			cmd->data |= RXH_L4_B_0_1 | RXH_L4_B_2_3;
 		cmd->data |= RXH_IP_SRC | RXH_IP_DST;
 		break;
@@ -783,12 +773,13 @@ static int fm10k_get_rxnfc(struct net_device *dev, struct ethtool_rxnfc *cmd,
 	return ret;
 }
 
-#define UDP_RSS_FLAGS (FM10K_FLAG_RSS_FIELD_IPV4_UDP | \
-		       FM10K_FLAG_RSS_FIELD_IPV6_UDP)
 static int fm10k_set_rss_hash_opt(struct fm10k_intfc *interface,
 				  struct ethtool_rxnfc *nfc)
 {
-	u32 flags = interface->flags;
+	int rss_ipv4_udp = test_bit(FM10K_FLAG_RSS_FIELD_IPV4_UDP,
+				    interface->flags);
+	int rss_ipv6_udp = test_bit(FM10K_FLAG_RSS_FIELD_IPV6_UDP,
+				    interface->flags);
 
 	/* RSS does not support anything other than hashing
 	 * to queues on src and dst IPs and ports
@@ -812,10 +803,12 @@ static int fm10k_set_rss_hash_opt(struct fm10k_intfc *interface,
 			return -EINVAL;
 		switch (nfc->data & (RXH_L4_B_0_1 | RXH_L4_B_2_3)) {
 		case 0:
-			flags &= ~FM10K_FLAG_RSS_FIELD_IPV4_UDP;
+			clear_bit(FM10K_FLAG_RSS_FIELD_IPV4_UDP,
+				  interface->flags);
 			break;
 		case (RXH_L4_B_0_1 | RXH_L4_B_2_3):
-			flags |= FM10K_FLAG_RSS_FIELD_IPV4_UDP;
+			set_bit(FM10K_FLAG_RSS_FIELD_IPV4_UDP,
+				interface->flags);
 			break;
 		default:
 			return -EINVAL;
@@ -827,10 +820,12 @@ static int fm10k_set_rss_hash_opt(struct fm10k_intfc *interface,
 			return -EINVAL;
 		switch (nfc->data & (RXH_L4_B_0_1 | RXH_L4_B_2_3)) {
 		case 0:
-			flags &= ~FM10K_FLAG_RSS_FIELD_IPV6_UDP;
+			clear_bit(FM10K_FLAG_RSS_FIELD_IPV6_UDP,
+				  interface->flags);
 			break;
 		case (RXH_L4_B_0_1 | RXH_L4_B_2_3):
-			flags |= FM10K_FLAG_RSS_FIELD_IPV6_UDP;
+			set_bit(FM10K_FLAG_RSS_FIELD_IPV6_UDP,
+				interface->flags);
 			break;
 		default:
 			return -EINVAL;
@@ -854,17 +849,17 @@ static int fm10k_set_rss_hash_opt(struct fm10k_intfc *interface,
 		return -EINVAL;
 	}
 
-	/* if we changed something we need to update flags */
-	if (flags != interface->flags) {
+	/* If something changed we need to update the MRQC register. Note that
+	 * test_bit() is guaranteed to return strictly 0 or 1, so testing for
+	 * equality is safe.
+	 */
+	if ((rss_ipv4_udp != test_bit(FM10K_FLAG_RSS_FIELD_IPV4_UDP,
+				      interface->flags)) ||
+	    (rss_ipv6_udp != test_bit(FM10K_FLAG_RSS_FIELD_IPV6_UDP,
+				      interface->flags))) {
 		struct fm10k_hw *hw = &interface->hw;
+		bool warn = false;
 		u32 mrqc;
-
-		if ((flags & UDP_RSS_FLAGS) &&
-		    !(interface->flags & UDP_RSS_FLAGS))
-			netif_warn(interface, drv, interface->netdev,
-				   "enabling UDP RSS: fragmented packets may arrive out of order to the stack above\n");
-
-		interface->flags = flags;
 
 		/* Perform hash on these packet types */
 		mrqc = FM10K_MRQC_IPV4 |
@@ -872,10 +867,23 @@ static int fm10k_set_rss_hash_opt(struct fm10k_intfc *interface,
 		       FM10K_MRQC_IPV6 |
 		       FM10K_MRQC_TCP_IPV6;
 
-		if (flags & FM10K_FLAG_RSS_FIELD_IPV4_UDP)
+		if (test_bit(FM10K_FLAG_RSS_FIELD_IPV4_UDP,
+			     interface->flags)) {
 			mrqc |= FM10K_MRQC_UDP_IPV4;
-		if (flags & FM10K_FLAG_RSS_FIELD_IPV6_UDP)
+			warn = true;
+		}
+		if (test_bit(FM10K_FLAG_RSS_FIELD_IPV6_UDP,
+			     interface->flags)) {
 			mrqc |= FM10K_MRQC_UDP_IPV6;
+			warn = true;
+		}
+
+		/* If we enable UDP RSS display a warning that this may cause
+		 * fragmented UDP packets to arrive out of order.
+		 */
+		if (warn)
+			netif_warn(interface, drv, interface->netdev,
+				   "enabling UDP RSS: fragmented packets may arrive out of order to the stack above\n");
 
 		fm10k_write_reg(hw, FM10K_MRQC(0), mrqc);
 	}
@@ -958,7 +966,7 @@ static void fm10k_self_test(struct net_device *dev,
 
 	memset(data, 0, sizeof(*data) * FM10K_TEST_LEN);
 
-	if (FM10K_REMOVED(hw)) {
+	if (FM10K_REMOVED(hw->hw_addr)) {
 		netif_err(interface, drv, dev,
 			  "Interface removed - test blocked\n");
 		eth_test->flags |= ETH_TEST_FL_FAILED;
@@ -974,7 +982,7 @@ static u32 fm10k_get_priv_flags(struct net_device *netdev)
 	struct fm10k_intfc *interface = netdev_priv(netdev);
 	u32 priv_flags = 0;
 
-	if (interface->flags & FM10K_FLAG_IES_MODE)
+	if (test_bit(FM10K_FLAG_IES_MODE, interface->flags))
 		priv_flags |= BIT(FM10K_PRV_FLAG_IES);
 
 	return priv_flags;
@@ -992,30 +1000,45 @@ static int fm10k_set_priv_flags(struct net_device *netdev, u32 priv_flags)
 		if (interface->hw.mac.type == fm10k_mac_vf)
 			return -EINVAL;
 
-		interface->flags |= FM10K_FLAG_IES_MODE;
+		set_bit(FM10K_FLAG_IES_MODE, interface->flags);
 	} else {
-		interface->flags &= ~FM10K_FLAG_IES_MODE;
+		clear_bit(FM10K_FLAG_IES_MODE, interface->flags);
 	}
 
 	return 0;
 }
 
-u32 fm10k_get_reta_size(struct net_device __always_unused *netdev)
+static u32 fm10k_get_reta_size(struct net_device __always_unused *netdev)
 {
 	return FM10K_RETA_SIZE * FM10K_RETA_ENTRIES_PER_REG;
 }
 
 void fm10k_write_reta(struct fm10k_intfc *interface, const u32 *indir)
 {
+	u16 rss_i = interface->ring_feature[RING_F_RSS].indices;
 	struct fm10k_hw *hw = &interface->hw;
-	int i;
+	u32 table[4];
+	int i, j;
 
 	/* record entries to reta table */
-	for (i = 0; i < FM10K_RETA_SIZE; i++, indir += 4) {
-		u32 reta = indir[0] |
-			   (indir[1] << 8) |
-			   (indir[2] << 16) |
-			   (indir[3] << 24);
+	for (i = 0; i < FM10K_RETA_SIZE; i++) {
+		u32 reta, n;
+
+		/* generate a new table if we weren't given one */
+		for (j = 0; j < 4; j++) {
+			if (indir)
+				n = indir[4 * i + j];
+			else
+				n = ethtool_rxfh_indir_default(4 * i + j,
+							       rss_i);
+
+			table[j] = n;
+		}
+
+		reta = table[0] |
+			(table[1] << 8) |
+			(table[2] << 16) |
+			(table[3] << 24);
 
 		if (interface->reta[i] == reta)
 			continue;
@@ -1068,7 +1091,7 @@ static int fm10k_set_reta(struct net_device *netdev, const u32 *indir)
 	 * to set the redirection table to default, so we just assume that it
 	 * is an explicit request for a customized table.
 	 */
-	interface->flags |= FM10K_FLAG_RXFH_CONFIGURED;
+	set_bit(FM10K_FLAG_RXFH_CONFIGURED, interface->flags);
 #endif
 
 	fm10k_write_reta(interface, indir);
@@ -1327,6 +1350,7 @@ static const struct ethtool_ops_ext fm10k_ethtool_ops_ext = {
 	.get_channels		= fm10k_get_channels,
 	.set_channels		= fm10k_set_channels,
 #endif
+	.get_ts_info		= ethtool_op_get_ts_info,
 };
 
 void fm10k_set_ethtool_ops(struct net_device *dev)

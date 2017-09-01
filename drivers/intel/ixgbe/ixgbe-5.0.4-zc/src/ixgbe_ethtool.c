@@ -43,26 +43,11 @@
 #include <linux/net_tstamp.h>
 #endif
 
-#ifdef HAVE_PF_RING
-#include "../../../../../kernel/linux/pf_ring.h"
-extern s32 ixgbe_ftqf_add_filter(struct ixgbe_hw *hw, u8 proto, u32 saddr, u16 sport, u32 daddr, u16 dport, u8 rx_queue, u8 filter_id);
-
-#ifdef ETHTOOL_SRXNTUPLE /* was ETHTOOL_RXNTUPLE_ACTION_DROP */
-static int ixgbe_set_rx_ntuple(struct net_device *dev, struct ethtool_rx_ntuple *cmd);
-#endif
-#endif
-
 #ifndef ETH_GSTRING_LEN
 #define ETH_GSTRING_LEN 32
 #endif
 
 #define IXGBE_ALL_RAR_ENTRIES 16
-
-#ifdef HAVE_PF_RING /* RETA Patch */
-#ifdef HAVE_RHEL6_ETHTOOL_OPS_EXT_STRUCT
-#define IXGBE_RETA_SIZE 128
-#endif
-#endif
 
 #ifdef ETHTOOL_OPS_COMPAT
 #include "kcompat_ethtool.c"
@@ -152,6 +137,7 @@ static struct ixgbe_stats ixgbe_gstrings_stats[] = {
 	IXGBE_STAT("os2bmc_rx_by_host", stats.b2ogprc),
 #ifdef HAVE_PTP_1588_CLOCK
 	IXGBE_STAT("tx_hwtstamp_timeouts", tx_hwtstamp_timeouts),
+	IXGBE_STAT("tx_hwtstamp_skipped", tx_hwtstamp_skipped),
 	IXGBE_STAT("rx_hwtstamp_cleared", rx_hwtstamp_cleared),
 #endif /* HAVE_PTP_1588_CLOCK */
 };
@@ -207,7 +193,12 @@ static const char ixgbe_gstrings_test[][ETH_GSTRING_LEN] = {
 
 #ifdef HAVE_ETHTOOL_GET_SSET_COUNT
 static const char ixgbe_priv_flags_strings[][ETH_GSTRING_LEN] = {
+#define IXGBE_PRIV_FLAGS_FD_ATR		BIT(0)
 	"flow-director-atr",
+#ifdef HAVE_SWIOTLB_SKIP_CPU_SYNC
+#define IXGBE_PRIV_FLAGS_LEGACY_RX	BIT(1)
+	"legacy-rx",
+#endif
 };
 
 #define IXGBE_PRIV_FLAGS_STR_LEN ARRAY_SIZE(ixgbe_priv_flags_strings)
@@ -242,10 +233,208 @@ static __u32 ixgbe_backplane_type(struct ixgbe_hw *hw)
 	return mode;
 }
 
+#ifdef HAVE_ETHTOOL_CONVERT_U32_AND_LINK_MODE
+static int ixgbe_get_link_ksettings(struct net_device *netdev,
+				    struct ethtool_link_ksettings *cmd)
+{
+	struct ixgbe_adapter *adapter = netdev_priv(netdev);
+	struct ixgbe_hw *hw = &adapter->hw;
+	ixgbe_link_speed supported_link;
+	bool autoneg = false;
+	u32 supported, advertising;
 
+	ethtool_convert_link_mode_to_legacy_u32(&supported,
+						cmd->link_modes.supported);
 
-int ixgbe_get_settings(struct net_device *netdev,
-		       struct ethtool_cmd *ecmd)
+	hw->mac.ops.get_link_capabilities(hw, &supported_link, &autoneg);
+
+	/* set the supported link speeds */
+	if (supported_link & IXGBE_LINK_SPEED_10GB_FULL)
+		supported |= (ixgbe_isbackplane(hw->phy.media_type)) ?
+			      ixgbe_backplane_type(hw) :
+			      SUPPORTED_10000baseT_Full;
+	if (supported_link & IXGBE_LINK_SPEED_1GB_FULL)
+		supported |= (ixgbe_isbackplane(hw->phy.media_type)) ?
+			      SUPPORTED_1000baseKX_Full :
+			      SUPPORTED_1000baseT_Full;
+	if (supported_link & IXGBE_LINK_SPEED_100_FULL)
+		supported |= SUPPORTED_100baseT_Full;
+	if (supported_link & IXGBE_LINK_SPEED_10_FULL)
+		supported |= SUPPORTED_10baseT_Full;
+
+	/* default advertised speed if phy.autoneg_advertised isn't set */
+	advertising = supported;
+
+	/* set the advertised speeds */
+	if (hw->phy.autoneg_advertised)	{
+		advertising = 0;
+		if (hw->phy.autoneg_advertised & IXGBE_LINK_SPEED_10_FULL)
+			advertising |= ADVERTISED_10baseT_Full;
+		if (hw->phy.autoneg_advertised & IXGBE_LINK_SPEED_100_FULL)
+			advertising |= ADVERTISED_100baseT_Full;
+		if (hw->phy.autoneg_advertised & IXGBE_LINK_SPEED_10GB_FULL)
+			advertising |= supported & ADVERTISED_MASK_10G;
+		if (hw->phy.autoneg_advertised & IXGBE_LINK_SPEED_1GB_FULL) {
+			if (supported & SUPPORTED_1000baseKX_Full)
+				advertising |= ADVERTISED_1000baseKX_Full;
+			else
+				advertising |= ADVERTISED_1000baseT_Full;
+		}
+	} else {
+		if (hw->phy.multispeed_fiber && !autoneg) {
+			if (supported_link & IXGBE_LINK_SPEED_10GB_FULL)
+				advertising = ADVERTISED_10000baseT_Full;
+		}
+	}
+
+	if (autoneg) {
+		supported |= SUPPORTED_Autoneg;
+		advertising |= ADVERTISED_Autoneg;
+		cmd->base.autoneg = AUTONEG_ENABLE;
+	} else {
+		cmd->base.autoneg = AUTONEG_DISABLE;
+	}
+
+	/* Determine the remaining settings based on the PHY type. */
+	switch (adapter->hw.phy.type) {
+	case ixgbe_phy_tn:
+	case ixgbe_phy_aq:
+	case ixgbe_phy_x550em_ext_t:
+	case ixgbe_phy_fw:
+	case ixgbe_phy_cu_unknown:
+		supported |= SUPPORTED_TP;
+		advertising |= ADVERTISED_TP;
+		cmd->base.port = PORT_TP;
+		break;
+	case ixgbe_phy_qt:
+		supported |= SUPPORTED_FIBRE;
+		advertising |= ADVERTISED_FIBRE;
+		cmd->base.port = PORT_FIBRE;
+		break;
+	case ixgbe_phy_nl:
+	case ixgbe_phy_sfp_passive_tyco:
+	case ixgbe_phy_sfp_passive_unknown:
+	case ixgbe_phy_sfp_ftl:
+	case ixgbe_phy_sfp_avago:
+	case ixgbe_phy_sfp_intel:
+	case ixgbe_phy_sfp_unknown:
+	case ixgbe_phy_qsfp_passive_unknown:
+	case ixgbe_phy_qsfp_active_unknown:
+	case ixgbe_phy_qsfp_intel:
+	case ixgbe_phy_qsfp_unknown:
+		switch (adapter->hw.phy.sfp_type) {
+			/* SFP+ devices, further checking needed */
+		case ixgbe_sfp_type_da_cu:
+		case ixgbe_sfp_type_da_cu_core0:
+		case ixgbe_sfp_type_da_cu_core1:
+			supported |= SUPPORTED_FIBRE;
+			advertising |= ADVERTISED_FIBRE;
+			cmd->base.port = PORT_DA;
+			break;
+		case ixgbe_sfp_type_sr:
+		case ixgbe_sfp_type_lr:
+		case ixgbe_sfp_type_srlr_core0:
+		case ixgbe_sfp_type_srlr_core1:
+		case ixgbe_sfp_type_1g_sx_core0:
+		case ixgbe_sfp_type_1g_sx_core1:
+		case ixgbe_sfp_type_1g_lx_core0:
+		case ixgbe_sfp_type_1g_lx_core1:
+			supported |= SUPPORTED_FIBRE;
+			advertising |= ADVERTISED_FIBRE;
+			cmd->base.port = PORT_FIBRE;
+			break;
+		case ixgbe_sfp_type_not_present:
+			supported |= SUPPORTED_FIBRE;
+			advertising |= ADVERTISED_FIBRE;
+			cmd->base.port = PORT_NONE;
+			break;
+		case ixgbe_sfp_type_1g_cu_core0:
+		case ixgbe_sfp_type_1g_cu_core1:
+			supported |= SUPPORTED_TP;
+			advertising |= ADVERTISED_TP;
+			cmd->base.port = PORT_TP;
+			break;
+		case ixgbe_sfp_type_unknown:
+		default:
+			supported |= SUPPORTED_FIBRE;
+			advertising |= ADVERTISED_FIBRE;
+			cmd->base.port = PORT_OTHER;
+			break;
+		}
+		break;
+	case ixgbe_phy_xaui:
+		supported |= SUPPORTED_FIBRE;
+		advertising |= ADVERTISED_FIBRE;
+		cmd->base.port = PORT_NONE;
+		break;
+	case ixgbe_phy_unknown:
+	case ixgbe_phy_generic:
+	case ixgbe_phy_sfp_unsupported:
+	default:
+		supported |= SUPPORTED_FIBRE;
+		advertising |= ADVERTISED_FIBRE;
+		cmd->base.port = PORT_OTHER;
+		break;
+	}
+
+	/* Indicate pause support */
+	supported |= SUPPORTED_Pause;
+
+	switch (hw->fc.requested_mode) {
+	case ixgbe_fc_full:
+		advertising |= ADVERTISED_Pause;
+		break;
+	case ixgbe_fc_rx_pause:
+		advertising |= ADVERTISED_Pause | ADVERTISED_Asym_Pause;
+		break;
+	case ixgbe_fc_tx_pause:
+		advertising |= ADVERTISED_Asym_Pause;
+		break;
+	default:
+		advertising &= ~(ADVERTISED_Pause | ADVERTISED_Asym_Pause);
+	}
+
+	if (netif_carrier_ok(netdev)) {
+		switch (adapter->link_speed) {
+		case IXGBE_LINK_SPEED_10GB_FULL:
+			cmd->base.speed = SPEED_10000;
+			break;
+		case IXGBE_LINK_SPEED_5GB_FULL:
+			cmd->base.speed = SPEED_5000;
+			break;
+#ifdef SUPPORTED_2500baseX_Full
+		case IXGBE_LINK_SPEED_2_5GB_FULL:
+			cmd->base.speed = SPEED_2500;
+			break;
+#endif /* SUPPORTED_2500baseX_Full */
+		case IXGBE_LINK_SPEED_1GB_FULL:
+			cmd->base.speed = SPEED_1000;
+			break;
+		case IXGBE_LINK_SPEED_100_FULL:
+			cmd->base.speed = SPEED_100;
+			break;
+		case IXGBE_LINK_SPEED_10_FULL:
+			cmd->base.speed = SPEED_10;
+			break;
+		default:
+			break;
+		}
+		cmd->base.duplex = DUPLEX_FULL;
+	} else {
+		cmd->base.speed = SPEED_UNKNOWN;
+		cmd->base.duplex = DUPLEX_UNKNOWN;
+	}
+
+	ethtool_convert_legacy_u32_to_link_mode(cmd->link_modes.supported,
+						supported);
+	ethtool_convert_legacy_u32_to_link_mode(cmd->link_modes.advertising,
+						supported);
+
+	return 0;
+}
+#else /* !HAVE_ETHTOOL_CONVERT_U32_AND_LINK_MODE */
+static int ixgbe_get_settings(struct net_device *netdev,
+			      struct ethtool_cmd *ecmd)
 {
 	struct ixgbe_adapter *adapter = netdev_priv(netdev);
 	struct ixgbe_hw *hw = &adapter->hw;
@@ -256,9 +445,13 @@ int ixgbe_get_settings(struct net_device *netdev,
 
 	/* set the supported link speeds */
 	if (supported_link & IXGBE_LINK_SPEED_10GB_FULL)
-		ecmd->supported |= (ixgbe_isbackplane(hw->phy.media_type))? ixgbe_backplane_type(hw) : SUPPORTED_10000baseT_Full;
+		ecmd->supported |= (ixgbe_isbackplane(hw->phy.media_type)) ?
+				    ixgbe_backplane_type(hw) :
+				    SUPPORTED_10000baseT_Full;
 	if (supported_link & IXGBE_LINK_SPEED_1GB_FULL)
-		ecmd->supported |= (ixgbe_isbackplane(hw->phy.media_type))? SUPPORTED_1000baseKX_Full : SUPPORTED_1000baseT_Full;
+		ecmd->supported |= (ixgbe_isbackplane(hw->phy.media_type)) ?
+				    SUPPORTED_1000baseKX_Full :
+				    SUPPORTED_1000baseT_Full;
 	if (supported_link & IXGBE_LINK_SPEED_100_FULL)
 		ecmd->supported |= SUPPORTED_100baseT_Full;
 	if (supported_link & IXGBE_LINK_SPEED_10_FULL)
@@ -268,37 +461,34 @@ int ixgbe_get_settings(struct net_device *netdev,
 	ecmd->advertising = ecmd->supported;
 
 	/* set the advertised speeds */
-	if (hw->phy.autoneg_advertised)
-	{
-		ecmd->advertising = 0x00;
+	if (hw->phy.autoneg_advertised) {
+		ecmd->advertising = 0;
 		if (hw->phy.autoneg_advertised & IXGBE_LINK_SPEED_10_FULL)
 			ecmd->advertising |= ADVERTISED_10baseT_Full;
 		if (hw->phy.autoneg_advertised & IXGBE_LINK_SPEED_100_FULL)
 			ecmd->advertising |= ADVERTISED_100baseT_Full;
 		if (hw->phy.autoneg_advertised & IXGBE_LINK_SPEED_10GB_FULL)
 			ecmd->advertising |= (ecmd->supported & ADVERTISED_MASK_10G);
-		if (hw->phy.autoneg_advertised & IXGBE_LINK_SPEED_1GB_FULL)
-		{
-			if(ecmd->supported & SUPPORTED_1000baseKX_Full)
+		if (hw->phy.autoneg_advertised & IXGBE_LINK_SPEED_1GB_FULL) {
+			if (ecmd->supported & SUPPORTED_1000baseKX_Full)
 				ecmd->advertising |= ADVERTISED_1000baseKX_Full;
 			else
 				ecmd->advertising |= ADVERTISED_1000baseT_Full;
 		}
-	}
-	else
-	{
-		if (hw->phy.multispeed_fiber && !autoneg)
-		{
+	} else {
+		if (hw->phy.multispeed_fiber && !autoneg) {
 			if (supported_link & IXGBE_LINK_SPEED_10GB_FULL)
 				ecmd->advertising = ADVERTISED_10000baseT_Full;
 		}
 	}
+
 	if (autoneg) {
 		ecmd->supported |= SUPPORTED_Autoneg;
 		ecmd->advertising |= ADVERTISED_Autoneg;
 		ecmd->autoneg = AUTONEG_ENABLE;
-	} else
+	} else {
 		ecmd->autoneg = AUTONEG_DISABLE;
+	}
 
 	ecmd->transceiver = XCVR_EXTERNAL;
 
@@ -409,7 +599,7 @@ int ixgbe_get_settings(struct net_device *netdev,
 			ethtool_cmd_speed_set(ecmd, SPEED_10000);
 			break;
 		case IXGBE_LINK_SPEED_5GB_FULL:
-			ethtool_cmd_speed_set(ecmd, 5000);
+			ethtool_cmd_speed_set(ecmd, SPEED_5000);
 			break;
 #ifdef SUPPORTED_2500baseX_Full
 		case IXGBE_LINK_SPEED_2_5GB_FULL:
@@ -431,12 +621,85 @@ int ixgbe_get_settings(struct net_device *netdev,
 		ecmd->duplex = DUPLEX_FULL;
 	} else {
 		ethtool_cmd_speed_set(ecmd, SPEED_UNKNOWN);
-		ecmd->duplex = -1;
+		ecmd->duplex = DUPLEX_UNKNOWN;
 	}
 
 	return 0;
 }
+#endif /* !HAVE_ETHTOOL_CONVERT_U32_AND_LINK_MODE */
 
+#ifdef HAVE_ETHTOOL_CONVERT_U32_AND_LINK_MODE
+static int ixgbe_set_link_ksettings(struct net_device *netdev,
+				    const struct ethtool_link_ksettings *cmd)
+{
+	struct ixgbe_adapter *adapter = netdev_priv(netdev);
+	struct ixgbe_hw *hw = &adapter->hw;
+	u32 advertised, old;
+	s32 err = 0;
+	u32 supported, advertising;
+
+	ethtool_convert_link_mode_to_legacy_u32(&supported,
+						cmd->link_modes.supported);
+	ethtool_convert_link_mode_to_legacy_u32(&advertising,
+						cmd->link_modes.advertising);
+
+	if ((hw->phy.media_type == ixgbe_media_type_copper) ||
+	    (hw->phy.multispeed_fiber)) {
+		/*
+		 * this function does not support duplex forcing, but can
+		 * limit the advertising of the adapter to the specified speed
+		 */
+		if (advertising & ~supported)
+			return -EINVAL;
+
+		/* only allow one speed at a time if no autoneg */
+		if (!cmd->base.autoneg && hw->phy.multispeed_fiber) {
+			if (advertising ==
+			    (ADVERTISED_10000baseT_Full |
+			     ADVERTISED_1000baseT_Full))
+				return -EINVAL;
+		}
+
+		old = hw->phy.autoneg_advertised;
+		advertised = 0;
+		if (advertising & ADVERTISED_10000baseT_Full)
+			advertised |= IXGBE_LINK_SPEED_10GB_FULL;
+
+		if (advertising & ADVERTISED_1000baseT_Full)
+			advertised |= IXGBE_LINK_SPEED_1GB_FULL;
+
+		if (advertising & ADVERTISED_100baseT_Full)
+			advertised |= IXGBE_LINK_SPEED_100_FULL;
+
+		if (advertising & ADVERTISED_10baseT_Full)
+			advertised |= IXGBE_LINK_SPEED_10_FULL;
+
+		if (old == advertised)
+			return err;
+		/* this sets the link speed and restarts auto-neg */
+		while (test_and_set_bit(__IXGBE_IN_SFP_INIT, &adapter->state))
+			usleep_range(1000, 2000);
+
+		hw->mac.autotry_restart = true;
+		err = hw->mac.ops.setup_link(hw, advertised, true);
+		if (err) {
+			e_info(probe, "setup link failed with code %d\n", err);
+			hw->mac.ops.setup_link(hw, old, true);
+		}
+		clear_bit(__IXGBE_IN_SFP_INIT, &adapter->state);
+	} else {
+		/* in this case we currently only support 10Gb/FULL */
+		u32 speed = cmd->base.speed;
+
+		if ((cmd->base.autoneg == AUTONEG_ENABLE) ||
+		    (advertising != ADVERTISED_10000baseT_Full) ||
+		    (speed + cmd->base.duplex != SPEED_10000 + DUPLEX_FULL))
+			return -EINVAL;
+	}
+
+	return err;
+}
+#else /* !HAVE_ETHTOOL_CONVERT_U32_AND_LINK_MODE */
 static int ixgbe_set_settings(struct net_device *netdev,
 			      struct ethtool_cmd *ecmd)
 {
@@ -493,6 +756,7 @@ static int ixgbe_set_settings(struct net_device *netdev,
 	else {
 		/* in this case we currently only support 10Gb/FULL */
 		u32 speed = ethtool_cmd_speed(ecmd);
+
 		if ((ecmd->autoneg == AUTONEG_ENABLE) ||
 		    (ecmd->advertising != ADVERTISED_10000baseT_Full) ||
 		    (speed + ecmd->duplex != SPEED_10000 + DUPLEX_FULL))
@@ -501,6 +765,7 @@ static int ixgbe_set_settings(struct net_device *netdev,
 
 	return err;
 }
+#endif /* !HAVE_ETHTOOL_CONVERT_U32_AND_LINK_MODE */
 
 static void ixgbe_get_pauseparam(struct net_device *netdev,
 				 struct ethtool_pauseparam *pause)
@@ -898,99 +1163,6 @@ static void ixgbe_get_regs(struct net_device *netdev, struct ethtool_regs *regs,
 
 }
 
-#ifdef HAVE_PF_RING /* RETA Patch */
-#ifdef HAVE_RHEL6_ETHTOOL_OPS_EXT_STRUCT
-extern int reta_via_ethtool;
-
-static u32 ixgbe_get_rxfh_indir_size(struct net_device *netdev)
-{
-	return IXGBE_RETA_SIZE;
-}
-
-static int ixgbe_get_rxfh_indir(struct net_device *netdev, u32 *indir)
-{
-	struct ixgbe_adapter *adapter = netdev_priv(netdev);
-	struct ixgbe_hw *hw = &adapter->hw;
-	int i, j, d, indices_multi;
-	u32 reta = 0;
-
-	/* Read out the redirection table as follows:
-	 * 82598: 128 (8 bit wide) entries containing pair of 4 bit RSS indices
-	 * 82599/X540: 128 (8 bit wide) entries containing 4 bit RSS index
-	 */
-	if (adapter->hw.mac.type == ixgbe_mac_82598EB)
-		indices_multi = 0x11;
-	else
-		indices_multi = 0x1;
-
-	/* Read out the redirection table */
-	for (i = 0, j = 0; i < IXGBE_RETA_SIZE / 4; i++) {
-		reta = IXGBE_READ_REG(hw, IXGBE_RETA(i));
-		j += 4;
-		for (d = 1; d < 5; d++) {
-			indir[j - d] = reta & 0x0F;
-			reta = reta >> 8;
-		}
-	}
-	return 0;
-}
-
-static int ixgbe_set_rxfh_indir(struct net_device *netdev, const u32 *indir)
-{
-	struct ixgbe_adapter *adapter = netdev_priv(netdev);
-	struct ixgbe_hw *hw = &adapter->hw;
-	u32 reta = 0;
-	int i, indices_multi;
-	u32 num_queues;
-
-	num_queues = adapter->num_rx_queues;
-
-	/*
-	 * Allow at least 2 queues w/ SR-IOV.
-	 */
-	if ((adapter->flags & IXGBE_FLAG_SRIOV_ENABLED) && (num_queues < 2))
-		num_queues = 2;
-
-	/* Verify user input. */
-	for (i = 0; i < IXGBE_RETA_SIZE; i++)
-		if (indir[i] >= num_queues)
-			return -EINVAL;
-
-	/* Fill out the redirection table as follows:
-	 * 82598: 128 (8 bit wide) entries containing pair of 4 bit RSS indices
-	 * 82599/X540: 128 (8 bit wide) entries containing 4 bit RSS index
-	 */
-	if (adapter->hw.mac.type == ixgbe_mac_82598EB)
-		indices_multi = 0x11;
-	else
-		indices_multi = 0x1;
-
-	/* Fill out the redirection table */
-	for (i = 0; i < IXGBE_RETA_SIZE; i++) {
-		reta = (reta << 8) | (indir[i] * indices_multi);
-		if ((i & 3) == 3) {
-			if (i < 128)
-				IXGBE_WRITE_REG(hw, IXGBE_RETA(i >> 2), reta);
-		}
-	}
-	return 0;
-}
-
-#if 0 /* TODO >=2.6.32-504.12.2.el6 */
-static u32 ixgbe_get_rxfh_key_size(struct net_device *netdev)
-{
-	struct ixgbe_adapter *adapter = netdev_priv(netdev);
-
-	if (adapter->hw.mac.type == ixgbe_mac_82599EB || 
-            adapter->hw.mac.type == ixgbe_mac_X540)
-		return 40;
-
-	return 0;
-}
-#endif
-#endif
-#endif
-
 static int ixgbe_get_eeprom_len(struct net_device *netdev)
 {
 	struct ixgbe_adapter *adapter = netdev_priv(netdev);
@@ -1116,6 +1288,10 @@ static void ixgbe_get_drvinfo(struct net_device *netdev,
 		sizeof(drvinfo->fw_version) - 1);
 	strncpy(drvinfo->bus_info, pci_name(adapter->pdev),
 		sizeof(drvinfo->bus_info) - 1);
+#ifdef HAVE_ETHTOOL_GET_SSET_COUNT
+
+	drvinfo->n_priv_flags = IXGBE_PRIV_FLAGS_STR_LEN;
+#endif
 }
 
 static void ixgbe_get_ringparam(struct net_device *netdev,
@@ -1140,13 +1316,6 @@ static int ixgbe_set_ringparam(struct net_device *netdev,
 	struct ixgbe_ring *temp_ring;
 	int i, err = 0;
 	u32 new_rx_count, new_tx_count;
-
-#ifdef HAVE_PF_RING
-	if (atomic_read(&adapter->pfring_zc.usage_counter) > 0) {
-		printk("[PF_RING-ZC] Interface %s is in use, unable to set ring params!\n", netdev->name);
-		return -EBUSY;
-	}
-#endif
 
 	if ((ring->rx_mini_pending) || (ring->rx_jumbo_pending))
 		return -EINVAL;
@@ -1474,11 +1643,8 @@ static void ixgbe_get_strings(struct net_device *netdev, u32 stringset,
 		break;
 #ifdef HAVE_ETHTOOL_GET_SSET_COUNT
 	case ETH_SS_PRIV_FLAGS:
-		for (i = 0; i < IXGBE_PRIV_FLAGS_STR_LEN; i++) {
-			memcpy(data, ixgbe_priv_flags_strings[i],
-			       ETH_GSTRING_LEN);
-			data += ETH_GSTRING_LEN;
-		}
+		memcpy(data, ixgbe_priv_flags_strings,
+		       IXGBE_PRIV_FLAGS_STR_LEN * ETH_GSTRING_LEN);
 		break;
 #endif /* HAVE_ETHTOOL_GET_SSET_COUNT */
 	}
@@ -2082,8 +2248,8 @@ static bool ixgbe_check_lbtest_frame(struct ixgbe_rx_buffer *rx_buffer,
 
 #ifndef CONFIG_IXGBE_DISABLE_PACKET_SPLIT
 	kunmap(rx_buffer->page);
-#endif
 
+#endif
 	return match;
 }
 
@@ -2104,7 +2270,7 @@ static u16 ixgbe_clean_test_rings(struct ixgbe_ring *rx_ring,
 	tx_ntc = tx_ring->next_to_clean;
 	rx_desc = IXGBE_RX_DESC(rx_ring, rx_ntc);
 
-	while (ixgbe_test_staterr(rx_desc, IXGBE_RXD_STAT_DD)) {
+	while (rx_desc->wb.upper.length) {
 		struct ixgbe_rx_buffer *rx_buffer;
 		struct ixgbe_tx_buffer *tx_buffer;
 
@@ -2442,17 +2608,22 @@ static int ixgbe_set_phys_id(struct net_device *netdev,
 	struct ixgbe_adapter *adapter = netdev_priv(netdev);
 	struct ixgbe_hw *hw = &adapter->hw;
 
+	if (!hw->mac.ops.led_on || !hw->mac.ops.led_off)
+		return -EOPNOTSUPP;
+
 	switch (state) {
 	case ETHTOOL_ID_ACTIVE:
 		adapter->led_reg = IXGBE_READ_REG(hw, IXGBE_LEDCTL);
 		return 2;
 
 	case ETHTOOL_ID_ON:
-		hw->mac.ops.led_on(hw, IXGBE_LED_ON);
+		if (hw->mac.ops.led_on(hw, hw->mac.led_link_act))
+			return -EINVAL;
 		break;
 
 	case ETHTOOL_ID_OFF:
-		hw->mac.ops.led_off(hw, IXGBE_LED_ON);
+		if (hw->mac.ops.led_off(hw, hw->mac.led_link_act))
+			return -EINVAL;
 		break;
 
 	case ETHTOOL_ID_INACTIVE:
@@ -2471,13 +2642,18 @@ static int ixgbe_phys_id(struct net_device *netdev, u32 data)
 	u32 led_reg = IXGBE_READ_REG(hw, IXGBE_LEDCTL);
 	u32 i;
 
+	if (!hw->mac.ops.led_on || !hw->mac.ops.led_off)
+		return -EOPNOTSUPP;
+
 	if (!data || data > 300)
 		data = 300;
 
 	for (i = 0; i < (data * 1000); i += 400) {
-		hw->mac.ops.led_on(hw, IXGBE_LED_ON);
+		if (hw->mac.ops.led_on(hw, hw->mac.led_link_act))
+			return -EINVAL;
 		msleep_interruptible(200);
-		hw->mac.ops.led_off(hw, IXGBE_LED_ON);
+		if (hw->mac.ops.led_off(hw, hw->mac.led_link_act))
+			return -EINVAL;
 		msleep_interruptible(200);
 	}
 
@@ -2990,9 +3166,11 @@ static int ixgbe_get_rss_hash_opts(struct ixgbe_adapter *adapter,
 	switch (cmd->flow_type) {
 	case TCP_V4_FLOW:
 		cmd->data |= RXH_L4_B_0_1 | RXH_L4_B_2_3;
+		/* fall through */
 	case UDP_V4_FLOW:
 		if (adapter->flags2 & IXGBE_FLAG2_RSS_FIELD_IPV4_UDP)
 			cmd->data |= RXH_L4_B_0_1 | RXH_L4_B_2_3;
+		/* fall through */
 	case SCTP_V4_FLOW:
 	case AH_ESP_V4_FLOW:
 	case AH_V4_FLOW:
@@ -3002,9 +3180,11 @@ static int ixgbe_get_rss_hash_opts(struct ixgbe_adapter *adapter,
 		break;
 	case TCP_V6_FLOW:
 		cmd->data |= RXH_L4_B_0_1 | RXH_L4_B_2_3;
+		/* fall through */
 	case UDP_V6_FLOW:
 		if (adapter->flags2 & IXGBE_FLAG2_RSS_FIELD_IPV6_UDP)
 			cmd->data |= RXH_L4_B_0_1 | RXH_L4_B_2_3;
+		/* fall through */
 	case SCTP_V6_FLOW:
 	case AH_ESP_V6_FLOW:
 	case AH_V6_FLOW:
@@ -3150,6 +3330,7 @@ static int ixgbe_flowspec_to_flow_type(struct ethtool_rx_flow_spec *fsp,
 				*flow_type = IXGBE_ATR_FLOW_TYPE_IPV4;
 				break;
 			}
+			/* fall through */
 		default:
 			return 0;
 		}
@@ -3431,13 +3612,6 @@ static int ixgbe_set_rxnfc(struct net_device *dev, struct ethtool_rxnfc *cmd)
 	struct ixgbe_adapter *adapter = netdev_priv(dev);
 	int ret = -EOPNOTSUPP;
 
-#ifdef HAVE_PF_RING
-	struct ethtool_rx_flow_spec *fsp = (struct ethtool_rx_flow_spec*) &cmd->fs;
-
-	if (fsp->ring_cookie > (adapter->num_rx_queues - 1))
-		fsp->ring_cookie = RX_CLS_FLOW_DISC; /* drop */
-#endif
-
 	switch (cmd->cmd) {
 	case ETHTOOL_SRXCLSRLINS:
 		ret = ixgbe_add_ethtool_fdir_entry(adapter, cmd);
@@ -3448,34 +3622,6 @@ static int ixgbe_set_rxnfc(struct net_device *dev, struct ethtool_rxnfc *cmd)
 	case ETHTOOL_SRXFH:
 		ret = ixgbe_set_rss_hash_opt(adapter, cmd);
 		break;
-#ifdef HAVE_PF_RING
-	case ETHTOOL_PFRING_SRXFTRLINS:
-		{
-		spin_lock(&adapter->fdir_perfect_lock);
-		ret = ixgbe_ftqf_add_filter(&adapter->hw, 
-					    fsp->flow_type,
-					    fsp->h_u.tcp_ip4_spec.ip4src, 
-					    fsp->h_u.tcp_ip4_spec.psrc,
-					    fsp->h_u.tcp_ip4_spec.ip4dst, 
-					    fsp->h_u.tcp_ip4_spec.pdst,
-					    fsp->ring_cookie,
-					    fsp->location);
-		spin_unlock(&adapter->fdir_perfect_lock);
-		}
-		break;
-	case ETHTOOL_PFRING_SRXFTRLDEL:
-		spin_lock(&adapter->fdir_perfect_lock);
-		ret = ixgbe_ftqf_add_filter(&adapter->hw, 0, 0, 0, 0, 0, 0, 
-					    fsp->location);
-		spin_unlock(&adapter->fdir_perfect_lock);
-		break;
-	case ETHTOOL_PFRING_SRXFTCHECK:
-		if (adapter->hw.mac.type != ixgbe_mac_82598EB) 	
-			ret = RING_MAGIC_VALUE;
-		else 
-			printk("[PF_RING] Hardware filtering rule not supported (no 82599)\n");
-		break;
-#endif
 	default:
 		break;
 	}
@@ -3494,9 +3640,7 @@ static int ixgbe_rss_indir_tbl_max(struct ixgbe_adapter *adapter)
 
 static u32 ixgbe_get_rxfh_key_size(struct net_device *netdev)
 {
-	struct ixgbe_adapter *adapter = netdev_priv(netdev);
-
-	return sizeof(adapter->rss_key);
+	return IXGBE_RSS_KEY_SIZE;
 }
 
 static u32 ixgbe_rss_indir_size(struct net_device *netdev)
@@ -3509,9 +3653,13 @@ static u32 ixgbe_rss_indir_size(struct net_device *netdev)
 static void ixgbe_get_reta(struct ixgbe_adapter *adapter, u32 *indir)
 {
 	int i, reta_size = ixgbe_rss_indir_tbl_entries(adapter);
+	u16 rss_m = adapter->ring_feature[RING_F_RSS].mask;
+
+	if (adapter->flags & IXGBE_FLAG_SRIOV_ENABLED)
+		rss_m = adapter->ring_feature[RING_F_RSS].indices - 1;
 
 	for (i = 0; i < reta_size; i++)
-		indir[i] = adapter->rss_indir_tbl[i];
+		indir[i] = adapter->rss_indir_tbl[i] & rss_m;
 }
 
 #ifdef HAVE_RXFH_HASHFUNC
@@ -3578,8 +3726,10 @@ static int ixgbe_set_rxfh(struct net_device *netdev, const u32 *indir,
 	}
 
 	/* Fill out the rss hash key */
-	if (key)
+	if (key) {
 		memcpy(adapter->rss_key, key, ixgbe_get_rxfh_key_size(netdev));
+		ixgbe_store_key(adapter);
+	}
 
 	ixgbe_store_reta(adapter);
 
@@ -3655,8 +3805,8 @@ static unsigned int ixgbe_max_channels(struct ixgbe_adapter *adapter)
 		/* We only support one q_vector without MSI-X */
 		max_combined = 1;
 	} else if (adapter->flags & IXGBE_FLAG_SRIOV_ENABLED) {
-		/* SR-IOV currently only allows one queue on the PF */
-		max_combined = 1;
+		/* Limit value based on the queue mask */
+		max_combined = adapter->ring_feature[RING_F_RSS].mask + 1;
 	} else if (tcs > 1) {
 		/* For DCB report channels per traffic class */
 		if (adapter->hw.mac.type == ixgbe_mac_82598EB) {
@@ -3973,7 +4123,7 @@ static int ixgbe_set_eee(struct net_device *netdev, struct ethtool_eee *edata)
 #ifdef HAVE_ETHTOOL_GET_SSET_COUNT
 /**
  * ixgbe_get_priv_flags - report device private flags
- * @dev: network interface device structure
+ * @netdev: network interface device structure
  *
  * The get string set count and the string set should be matched for each
  * flag returned.  Add new strings for each flag to the ixgbe_priv_flags_strings
@@ -3981,36 +4131,46 @@ static int ixgbe_set_eee(struct net_device *netdev, struct ethtool_eee *edata)
  *
  * Returns a u32 bitmap of flags.
  **/
-static u32 ixgbe_get_priv_flags(struct net_device *dev)
+static u32 ixgbe_get_priv_flags(struct net_device *netdev)
 {
-	struct ixgbe_adapter *adapter = netdev_priv(dev);
-	u32 ret_flags = 0;
+	struct ixgbe_adapter *adapter = netdev_priv(netdev);
+	u32 priv_flags = 0;
 
-	ret_flags |= (adapter->flags & IXGBE_FLAG_FDIR_HASH_CAPABLE) ?
-		     IXGBE_PRIV_FLAGS_FD_ATR : 0;
+	if (adapter->flags & IXGBE_FLAG_FDIR_HASH_CAPABLE)
+		priv_flags |= IXGBE_PRIV_FLAGS_FD_ATR;
+#ifdef HAVE_SWIOTLB_SKIP_CPU_SYNC
 
-	return ret_flags;
+	if (adapter->flags2 & IXGBE_FLAG2_RX_LEGACY)
+		priv_flags |= IXGBE_PRIV_FLAGS_LEGACY_RX;
+#endif
+
+	return priv_flags;
 }
 
 /**
  * ixgbe_set_priv_flags - set private flags
- * @dev: network interface device structure
+ * @netdev: network interface device structure
  * @flags: bit flags to be set
  **/
-static int ixgbe_set_priv_flags(struct net_device *dev, u32 flags)
+static int ixgbe_set_priv_flags(struct net_device *netdev, u32 priv_flags)
 {
-	struct ixgbe_adapter *adapter = netdev_priv(dev);
+	struct ixgbe_adapter *adapter = netdev_priv(netdev);
+#ifdef HAVE_SWIOTLB_SKIP_CPU_SYNC
+	unsigned int flags2 = adapter->flags2;
+#endif
+	unsigned int flags = adapter->flags;
 
 	/* allow the user to control the state of the Flow
 	 * Director ATR (Application Targeted Routing) feature
 	 * of the driver
 	 */
-	if (flags & IXGBE_PRIV_FLAGS_FD_ATR) {
+	flags &= ~IXGBE_FLAG_FDIR_HASH_CAPABLE;
+	if (priv_flags & IXGBE_PRIV_FLAGS_FD_ATR) {
 		/* We cannot enable ATR if VMDq is enabled */
-		if (adapter->flags & IXGBE_FLAG_VMDQ_ENABLED)
+		if (flags & IXGBE_FLAG_VMDQ_ENABLED)
 			return -EINVAL;
 		/* We cannot enable ATR if we have 2 or more traffic classes */
-		if (netdev_get_num_tc(dev) > 1)
+		if (netdev_get_num_tc(netdev) > 1)
 			return -EINVAL;
 		/* We cannot enable ATR if RSS is disabled */
 		if (adapter->ring_feature[RING_F_RSS].limit <= 1)
@@ -4018,21 +4178,44 @@ static int ixgbe_set_priv_flags(struct net_device *dev, u32 flags)
 		/* A sample rate of 0 indicates ATR disabled */
 		if (!adapter->atr_sample_rate)
 			return -EINVAL;
-		adapter->flags |= IXGBE_FLAG_FDIR_HASH_CAPABLE;
-	} else {
-		adapter->flags &= ~IXGBE_FLAG_FDIR_HASH_CAPABLE;
+		flags |= IXGBE_FLAG_FDIR_HASH_CAPABLE;
 	}
+#ifdef HAVE_SWIOTLB_SKIP_CPU_SYNC
 
-	/* ATR state change requires a reset */
-	ixgbe_do_reset(dev);
+	flags2 &= ~IXGBE_FLAG2_RX_LEGACY;
+	if (priv_flags & IXGBE_PRIV_FLAGS_LEGACY_RX)
+		flags2 |= IXGBE_FLAG2_RX_LEGACY;
+#endif
+
+	if (flags != adapter->flags) {
+		adapter->flags = flags;
+
+		/* ATR state change requires a reset */
+		ixgbe_do_reset(netdev);
+#ifndef HAVE_SWIOTLB_SKIP_CPU_SYNC
+	}
+#else
+	} else if (flags2 != adapter->flags2) {
+		adapter->flags2 = flags2;
+
+		/* reset interface to repopulate queues */
+		if (netif_running(netdev))
+			ixgbe_reinit_locked(adapter);
+	}
+#endif
 
 	return 0;
 }
 
 #endif /* HAVE_ETHTOOL_GET_SSET_COUNT */
 static struct ethtool_ops ixgbe_ethtool_ops = {
+#ifdef HAVE_ETHTOOL_CONVERT_U32_AND_LINK_MODE
+	.get_link_ksettings	= ixgbe_get_link_ksettings,
+	.set_link_ksettings	= ixgbe_set_link_ksettings,
+#else
 	.get_settings		= ixgbe_get_settings,
 	.set_settings		= ixgbe_set_settings,
+#endif
 	.get_drvinfo		= ixgbe_get_drvinfo,
 	.get_regs_len		= ixgbe_get_regs_len,
 	.get_regs		= ixgbe_get_regs,
@@ -4134,14 +4317,6 @@ static const struct ethtool_ops_ext ixgbe_ethtool_ops_ext = {
 #ifdef ETHTOOL_GMODULEINFO
 	.get_module_info	= ixgbe_get_module_info,
 	.get_module_eeprom	= ixgbe_get_module_eeprom,
-#endif
-#ifdef HAVE_PF_RING /* RETA Patch */
-	.get_rxfh_indir_size	= ixgbe_get_rxfh_indir_size,
-	.get_rxfh_indir		= ixgbe_get_rxfh_indir,
-	.set_rxfh_indir		= ixgbe_set_rxfh_indir,
-#if 0 /* TODO >=2.6.32-504.12.2.el6 */
-	.get_rxfh_key_size	= ixgbe_get_rxfh_key_size
-#endif
 #endif
 #if defined(ETHTOOL_GRSSH) && defined(ETHTOOL_SRSSH)
 	.get_rxfh_indir_size	= ixgbe_rss_indir_size,

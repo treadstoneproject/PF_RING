@@ -1,5 +1,5 @@
 /* Intel PRO/1000 Linux driver
- * Copyright(c) 1999 - 2015 Intel Corporation.
+ * Copyright(c) 1999 - 2017 Intel Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -248,7 +248,8 @@ static int e1000_get_settings(struct net_device *netdev,
 		ecmd->eth_tp_mdix_ctrl = ETH_TP_MDI_AUTO;
 	else
 		ecmd->eth_tp_mdix_ctrl = hw->phy.mdix;
-
+	if (hw->phy.media_type != e1000_media_type_copper)
+		ecmd->eth_tp_mdix_ctrl = ETH_TP_MDI_INVALID;
 #endif
 #endif /* ETH_TP_MDI_X */
 	return 0;
@@ -286,8 +287,13 @@ static int e1000_set_spd_dplx(struct e1000_adapter *adapter, u32 spd, u8 dplx)
 		mac->forced_speed_duplex = ADVERTISE_100_FULL;
 		break;
 	case SPEED_1000 + DUPLEX_FULL:
-		mac->autoneg = 1;
-		adapter->hw.phy.autoneg_advertised = ADVERTISE_1000_FULL;
+		if (adapter->hw.phy.media_type == e1000_media_type_copper) {
+			mac->autoneg = 1;
+			adapter->hw.phy.autoneg_advertised =
+			    ADVERTISE_1000_FULL;
+		} else {
+			mac->forced_speed_duplex = ADVERTISE_1000_FULL;
+		}
 		break;
 	case SPEED_1000 + DUPLEX_HALF:	/* not supported */
 	default:
@@ -616,7 +622,8 @@ static void e1000_get_regs(struct net_device *netdev,
 
 	pci_read_config_byte(adapter->pdev, PCI_REVISION_ID, &revision_id);
 
-	regs->version = (1 << 24) | (revision_id << 16) | adapter->pdev->device;
+	regs->version =
+	    (1u << 24) | (revision_id << 16) | adapter->pdev->device;
 
 	regs_buff[0] = er32(CTRL);
 	regs_buff[1] = er32(STATUS);
@@ -821,8 +828,6 @@ static void e1000_get_drvinfo(struct net_device *netdev,
 
 	strlcpy(drvinfo->bus_info, pci_name(adapter->pdev),
 		sizeof(drvinfo->bus_info));
-	drvinfo->regdump_len = e1000_get_regs_len(netdev);
-	drvinfo->eedump_len = e1000_get_eeprom_len(netdev);
 }
 
 static void e1000_get_ringparam(struct net_device *netdev,
@@ -844,13 +849,6 @@ static int e1000_set_ringparam(struct net_device *netdev,
 	int err = 0, size = sizeof(struct e1000_ring);
 	bool set_tx = false, set_rx = false;
 	u16 new_rx_count, new_tx_count;
-
-#ifdef HAVE_PF_RING
-	if(atomic_read(&adapter->pfring_zc.usage_counter) > 0) {
-		printk("[PF_RING-ZC] Interface %s is in use, unable to set ring params!\n", netdev->name);
-		return -EBUSY;
-	}
-#endif
 
 	if ((ring->rx_mini_pending) || (ring->rx_jumbo_pending))
 		return -EINVAL;
@@ -1077,28 +1075,27 @@ static int e1000_reg_test(struct e1000_adapter *adapter, u64 *data)
 	case e1000_pch2lan:
 	case e1000_pch_lpt:
 	case e1000_pch_spt:
-		mask |= (1 << 18);
+		mask |= BIT(18);
 		break;
 	default:
 		break;
 	}
 
-	if ((mac->type == e1000_pch_lpt) || (mac->type == e1000_pch_spt))
+	if (mac->type >= e1000_pch_lpt)
 		wlock_mac = (er32(FWSM) & E1000_FWSM_WLOCK_MAC_MASK) >>
 		    E1000_FWSM_WLOCK_MAC_SHIFT;
 
 	for (i = 0; i < mac->rar_entry_count; i++) {
-		if ((mac->type == e1000_pch_lpt) ||
-		    (mac->type == e1000_pch_spt)) {
+		if (mac->type >= e1000_pch_lpt) {
 			/* Cannot test write-protected SHRAL[n] registers */
 			if ((wlock_mac == 1) || (wlock_mac && (i > wlock_mac)))
 				continue;
 
 			/* SHRAH[9] different than the others */
 			if (i == 10)
-				mask |= (1 << 30);
+				mask |= BIT(30);
 			else
-				mask &= ~(1 << 30);
+				mask &= ~BIT(30);
 		}
 		if (mac->type == e1000_pch2lan) {
 			/* SHRAH[0,1,2] different than previous */
@@ -1106,7 +1103,7 @@ static int e1000_reg_test(struct e1000_adapter *adapter, u64 *data)
 				mask &= 0xFFF4FFFF;
 			/* SHRAH[3] different than SHRAH[0,1,2] */
 			if (i == 4)
-				mask |= (1 << 30);
+				mask |= BIT(30);
 			/* RAR[1-6] owned by management engine - skipping */
 			if (i > 0)
 				i += 6;
@@ -1201,7 +1198,7 @@ static int e1000_intr_test(struct e1000_adapter *adapter, u64 *data)
 	/* Test each interrupt */
 	for (i = 0; i < 10; i++) {
 		/* Interrupt to test */
-		mask = 1 << i;
+		mask = BIT(i);
 
 		if (adapter->flags & FLAG_IS_ICH) {
 			switch (mask) {
@@ -1569,7 +1566,7 @@ static int e1000_integrated_phy_loopback(struct e1000_adapter *adapter)
 	case e1000_phy_82579:
 		/* Disable PHY energy detect power down */
 		e1e_rphy(hw, PHY_REG(0, 21), &phy_reg);
-		e1e_wphy(hw, PHY_REG(0, 21), phy_reg & ~(1 << 3));
+		e1e_wphy(hw, PHY_REG(0, 21), phy_reg & ~BIT(3));
 		/* Disable full chip energy detect */
 		e1e_rphy(hw, PHY_REG(776, 18), &phy_reg);
 		e1e_wphy(hw, PHY_REG(776, 18), phy_reg | 1);
@@ -1635,7 +1632,7 @@ static int e1000_set_82571_fiber_loopback(struct e1000_adapter *adapter)
 
 	/* disable autoneg */
 	ctrl = er32(TXCW);
-	ctrl &= ~(1 << 31);
+	ctrl &= ~BIT(31);
 	ew32(TXCW, ctrl);
 
 	link = (er32(STATUS) & E1000_STATUS_LU);
@@ -1698,7 +1695,7 @@ static int e1000_setup_loopback_test(struct e1000_adapter *adapter)
 	struct e1000_hw *hw = &adapter->hw;
 	u32 rctl, fext_nvm11, tarc0;
 
-	if (hw->mac.type == e1000_pch_spt) {
+	if (hw->mac.type >= e1000_pch_spt) {
 		fext_nvm11 = er32(FEXTNVM11);
 		fext_nvm11 |= E1000_FEXTNVM11_DISABLE_MULR_FIX;
 		ew32(FEXTNVM11, fext_nvm11);
@@ -2010,7 +2007,7 @@ static void e1000_diag_test(struct net_device *netdev,
 
 		if (if_running)
 			/* indicate we're in test mode */
-			dev_close(netdev);
+			e1000e_close(netdev);
 
 		if (e1000_reg_test(adapter, &data[0]))
 			eth_test->flags |= ETH_TEST_FL_FAILED;
@@ -2043,7 +2040,7 @@ static void e1000_diag_test(struct net_device *netdev,
 
 		clear_bit(__E1000_TESTING, &adapter->state);
 		if (if_running)
-			dev_open(netdev);
+			e1000e_open(netdev);
 	} else {
 		/* Online tests */
 
@@ -2566,21 +2563,21 @@ static int e1000e_get_ts_info(struct net_device *netdev,
 				  SOF_TIMESTAMPING_RX_HARDWARE |
 				  SOF_TIMESTAMPING_RAW_HARDWARE);
 
-	info->tx_types = (1 << HWTSTAMP_TX_OFF) | (1 << HWTSTAMP_TX_ON);
+	info->tx_types = BIT(HWTSTAMP_TX_OFF) | BIT(HWTSTAMP_TX_ON);
 
-	info->rx_filters = ((1 << HWTSTAMP_FILTER_NONE) |
+	info->rx_filters = (BIT(HWTSTAMP_FILTER_NONE) |
 #ifdef HAVE_PTP_1588_CLOCK
-			    (1 << HWTSTAMP_FILTER_PTP_V1_L4_SYNC) |
-			    (1 << HWTSTAMP_FILTER_PTP_V1_L4_DELAY_REQ) |
-			    (1 << HWTSTAMP_FILTER_PTP_V2_L4_SYNC) |
-			    (1 << HWTSTAMP_FILTER_PTP_V2_L4_DELAY_REQ) |
-			    (1 << HWTSTAMP_FILTER_PTP_V2_L2_SYNC) |
-			    (1 << HWTSTAMP_FILTER_PTP_V2_L2_DELAY_REQ) |
-			    (1 << HWTSTAMP_FILTER_PTP_V2_EVENT) |
-			    (1 << HWTSTAMP_FILTER_PTP_V2_SYNC) |
-			    (1 << HWTSTAMP_FILTER_PTP_V2_DELAY_REQ) |
+			    BIT(HWTSTAMP_FILTER_PTP_V1_L4_SYNC) |
+			    BIT(HWTSTAMP_FILTER_PTP_V1_L4_DELAY_REQ) |
+			    BIT(HWTSTAMP_FILTER_PTP_V2_L4_SYNC) |
+			    BIT(HWTSTAMP_FILTER_PTP_V2_L4_DELAY_REQ) |
+			    BIT(HWTSTAMP_FILTER_PTP_V2_L2_SYNC) |
+			    BIT(HWTSTAMP_FILTER_PTP_V2_L2_DELAY_REQ) |
+			    BIT(HWTSTAMP_FILTER_PTP_V2_EVENT) |
+			    BIT(HWTSTAMP_FILTER_PTP_V2_SYNC) |
+			    BIT(HWTSTAMP_FILTER_PTP_V2_DELAY_REQ) |
 #endif
-			    (1 << HWTSTAMP_FILTER_ALL));
+			    BIT(HWTSTAMP_FILTER_ALL));
 
 #ifdef HAVE_PTP_1588_CLOCK
 	if (adapter->ptp_clock)

@@ -1,5 +1,5 @@
 /* Intel PRO/1000 Linux driver
- * Copyright(c) 1999 - 2015 Intel Corporation.
+ * Copyright(c) 1999 - 2017 Intel Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -63,6 +63,7 @@
 #define E1000_TIPG	0x00410	/* Tx Inter-packet gap -RW */
 #define E1000_AIT	0x00458	/* Adaptive Interframe Spacing Throttle - RW */
 #define E1000_LEDCTL	0x00E00	/* LED Control - RW */
+#define E1000_LEDMUX	0x08130	/* LED MUX Control */
 #define E1000_EXTCNF_CTRL	0x00F00	/* Extended Configuration Control */
 #define E1000_EXTCNF_SIZE	0x00F08	/* Extended Configuration Size */
 #define E1000_PHY_CTRL	0x00F10	/* PHY Control Register in CSR */

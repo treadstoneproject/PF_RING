@@ -1,7 +1,7 @@
 /*******************************************************************************
 
-  Intel(R) Gigabit Ethernet Linux driver
-  Copyright(c) 2007-2015 Intel Corporation.
+  Intel(R) Gigabit Ethernet Linux Driver
+  Copyright(c) 2007 - 2017 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -44,9 +44,7 @@
 struct igb_adapter;
 
 #if defined(CONFIG_DCA) || defined(CONFIG_DCA_MODULE)
-#ifndef HAVE_PF_RING /* FIXX temporarily disabling DCA which is causing crashes on some systems */
 #define IGB_DCA
-#endif
 #endif
 #ifdef IGB_DCA
 #include <linux/dca.h>
@@ -62,10 +60,6 @@ struct igb_adapter;
 #include "e1000_82575.h"
 #include "e1000_manage.h"
 #include "e1000_mbx.h"
-
-#ifdef HAVE_PF_RING
-#include "../../../../../kernel/linux/pf_ring.h"
-#endif
 
 #define IGB_ERR(args...) pr_err(KERN_ERR "igb: " args)
 
@@ -110,13 +104,6 @@ struct igb_adapter;
 #define IGB_DEFAULT_RXD                  256
 #define IGB_MIN_RXD                       80
 #define IGB_MAX_RXD                     4096
-
-#ifdef HAVE_PF_RING
-#undef IGB_DEFAULT_TXD
-#undef IGB_DEFAULT_RXD
-#define IGB_DEFAULT_RXD                 2048
-#define IGB_DEFAULT_TXD                 2048
-#endif
 
 #define IGB_MIN_ITR_USECS                 10 /* 100k irq/sec */
 #define IGB_MAX_ITR_USECS               8191 /* 120  irq/sec */
@@ -407,18 +394,6 @@ struct igb_ring {
 	struct net_device *vmdq_netdev;
 	int vqueue_index;		/* queue index for virtual netdev */
 #endif
-#ifdef HAVE_PF_RING
-	struct {
-		atomic_t queue_in_use;
-
-		union {
-			struct {
-				wait_queue_head_t packet_waitqueue;
-				u8 interrupt_received, interrupt_enabled;
-			} rx;
-		} rx_tx;
-	} pfring_zc;
-#endif
 } ____cacheline_internodealigned_in_smp;
 
 struct igb_q_vector {
@@ -635,7 +610,7 @@ struct igb_adapter {
 	u32 rss_queues;
 	u32 tss_queues;
 	u32 vmdq_pools;
-	char fw_version[32];
+	char fw_version[45];
 	u32 wvbr;
 	struct igb_mac_addr *mac_table;
 #ifdef CONFIG_IGB_VMDQ_NETDEV
@@ -691,12 +666,6 @@ struct igb_adapter {
 #ifdef ETHTOOL_GRXFHINDIR
 	u32 rss_indir_tbl_init;
 	u8 rss_indir_tbl[IGB_RETA_SIZE];
-#endif
-
-#ifdef HAVE_PF_RING
-	struct {
-		atomic_t usage_counter;
-	} pfring_zc;
 #endif
 };
 
@@ -806,6 +775,8 @@ enum e1000_state_t {
 extern char igb_driver_name[];
 extern char igb_driver_version[];
 
+extern int igb_open(struct net_device *netdev);
+extern int igb_close(struct net_device *netdev);
 extern int igb_up(struct igb_adapter *);
 extern void igb_down(struct igb_adapter *);
 extern void igb_reinit_locked(struct igb_adapter *);

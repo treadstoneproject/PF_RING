@@ -1,3 +1,6 @@
+# PF_RING
+PF_RING enhanced supports the filter IP ML on a programmable logic platform.
+
 ![pfring][pfring_logo] ![ntop][ntop_logo]
 # PF_RING™
 
@@ -23,3 +26,4 @@ PF_RING™ kernel module and drivers are distributed under the GNU GPLv2 license
 
 [pfring_logo]: http://www.ntop.org/wp-content/uploads/2015/05/pf_ring-logo-150x150.png
 [ntop_logo]: https://camo.githubusercontent.com/58e2a1ecfff62d8ecc9d74633bd1013f26e06cba/687474703a2f2f7777772e6e746f702e6f72672f77702d636f6e74656e742f75706c6f6164732f323031352f30352f6e746f702e706e67
+

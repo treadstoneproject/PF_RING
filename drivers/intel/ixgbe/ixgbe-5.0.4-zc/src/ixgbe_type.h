@@ -135,56 +135,12 @@
 #define IXGBE_DEV_ID_X550EM_X_KR		0x15AB
 #define IXGBE_DEV_ID_X550EM_X_SFP		0x15AC
 #define IXGBE_DEV_ID_X550EM_X_10G_T		0x15AD
+#define IXGBE_DEV_ID_X550EM_X_1G_T		0x15AE
 #define IXGBE_DEV_ID_X550EM_X_XFI		0x15B0
 
 #define IXGBE_CAT(r,m) IXGBE_##r##m
 
 #define IXGBE_BY_MAC(_hw, r) ((_hw)->mvals[IXGBE_CAT(r, _IDX)])
-
-#ifdef HAVE_PF_RING
-#define SILICOM_PE210G2BPi9LRD_SSID        0x125
-#define SILICOM_PE210G2BPi9SRD_SSID        0x124
-#define SILICOM_M1E210G2BPi9SRD_SSID       0x484
-#define SILICOM_M1E210G2BPi9LRD_SSID       0x485
-
-#define SILICOM_PE310G4BPi9SRD_SSID        0x134
-#define SILICOM_PE310G4BPi9LRD_SSID        0x135
-
-#define SILICOM_M1E210G2BPI9SRDJP_SSID    0x1E00
-#define SILICOM_M1E210G2BPI9SRDJP1_SSID   0x1E10
-#define SILICOM_M1E210G2BPI9LRDJP_SSID    0x1F00
-#define SILICOM_M1E210G2BPI9LRDJP1_SSID   0x1F10
-
-#define SILSRD_IF_SERIES(pid) \
-           ((pid==SILICOM_PE310G4BPi9SRD_SSID) || \
-           (pid==SILICOM_PE310G4BPi9LRD_SSID) || \
-           (pid==SILICOM_PE210G2BPi9SRD_SSID) || \
-           (pid==SILICOM_M1E210G2BPi9SRD_SSID) || \
-           (pid==SILICOM_M1E210G2BPi9LRD_SSID) || \
-           (pid==SILICOM_M1E210G2BPI9SRDJP_SSID)|| \
-           (pid==SILICOM_M1E210G2BPI9SRDJP1_SSID)|| \
-           (pid==SILICOM_M1E210G2BPI9LRDJP_SSID)|| \
-           (pid==SILICOM_M1E210G2BPI9LRDJP1_SSID)|| \
-           (pid==SILICOM_PE210G2BPi9LRD_SSID))
-
-#define SIL2BP9_IF_SERIES(pid) \
-           ((pid==0x120) || \
-           (pid==0x121) || \
-	   (pid==0x122) || \
-	   (pid==0x123) || \
-	   (pid==0x480) || \
-	   (pid==0x481) || \
-	   (pid==0x482) || \
-	   (pid==0x483) || \
-           (pid==SILICOM_PE210G2BPi9SRD_SSID) || \
-           (pid==SILICOM_M1E210G2BPi9SRD_SSID) || \
-           (pid==SILICOM_M1E210G2BPi9LRD_SSID) || \
-           (pid==SILICOM_M1E210G2BPI9SRDJP_SSID)|| \
-           (pid==SILICOM_M1E210G2BPI9SRDJP1_SSID)|| \
-           (pid==SILICOM_M1E210G2BPI9LRDJP_SSID)|| \
-           (pid==SILICOM_M1E210G2BPI9LRDJP1_SSID)|| \
-           (pid==SILICOM_PE210G2BPi9LRD_SSID))
-#endif /* HAVE_PF_RING */
 
 /* General Registers */
 #define IXGBE_CTRL		0x00000
@@ -329,6 +285,46 @@ struct ixgbe_thermal_diode_data {
 
 struct ixgbe_thermal_sensor_data {
 	struct ixgbe_thermal_diode_data sensor[IXGBE_MAX_SENSORS];
+};
+
+#define NVM_OROM_OFFSET		0x17
+#define NVM_OROM_BLK_LOW	0x83
+#define NVM_OROM_BLK_HI		0x84
+#define NVM_OROM_PATCH_MASK	0xFF
+#define NVM_OROM_SHIFT		8
+
+#define NVM_VER_MASK		0x00FF /* version mask */
+#define NVM_VER_SHIFT		8     /* version bit shift */
+#define NVM_OEM_PROD_VER_PTR	0x1B  /* OEM Product version block pointer */
+#define NVM_OEM_PROD_VER_CAP_OFF 0x1  /* OEM Product version format offset */
+#define NVM_OEM_PROD_VER_OFF_L	0x2   /* OEM Product version offset low */
+#define NVM_OEM_PROD_VER_OFF_H	0x3   /* OEM Product version offset high */
+#define NVM_OEM_PROD_VER_CAP_MASK 0xF /* OEM Product version cap mask */
+#define NVM_OEM_PROD_VER_MOD_LEN 0x3  /* OEM Product version module length */
+#define NVM_ETK_OFF_LOW		0x2D  /* version low order word */
+#define NVM_ETK_OFF_HI		0x2E  /* version high order word */
+#define NVM_ETK_SHIFT		16    /* high version word shift */
+#define NVM_VER_INVALID		0xFFFF
+#define NVM_ETK_VALID		0x8000
+#define NVM_INVALID_PTR		0xFFFF
+#define NVM_VER_SIZE		32    /* version sting size */
+
+struct ixgbe_nvm_version {
+	u32 etk_id;
+	u8  nvm_major;
+	u16 nvm_minor;
+	u8  nvm_id;
+
+	bool oem_valid;
+	u8   oem_major;
+	u8   oem_minor;
+	u16  oem_release;
+
+	bool or_valid;
+	u8  or_major;
+	u16 or_build;
+	u8  or_patch;
+
 };
 
 /* Interrupt Registers */
@@ -2639,6 +2635,7 @@ enum {
 #define IXGBE_MRQC_VMDQRSS64EN	0x0000000B /* VMDq2 64 pools w/ RSS */
 #define IXGBE_MRQC_VMDQRT8TCEN	0x0000000C /* VMDq2/RT 16 pool 8 TC */
 #define IXGBE_MRQC_VMDQRT4TCEN	0x0000000D /* VMDq2/RT 32 pool 4 TC */
+#define IXGBE_MRQC_L3L4TXSWEN	0x00008000 /* Enable L3/L4 Tx switch */
 #define IXGBE_MRQC_RSS_FIELD_MASK	0xFFFF0000
 #define IXGBE_MRQC_RSS_FIELD_IPV4_TCP	0x00010000
 #define IXGBE_MRQC_RSS_FIELD_IPV4	0x00020000
@@ -3417,24 +3414,25 @@ typedef u32 ixgbe_link_speed;
 					 IXGBE_LINK_SPEED_10GB_FULL)
 
 /* Physical layer type */
-typedef u32 ixgbe_physical_layer;
+typedef u64 ixgbe_physical_layer;
 #define IXGBE_PHYSICAL_LAYER_UNKNOWN		0
-#define IXGBE_PHYSICAL_LAYER_10GBASE_T		0x0001
-#define IXGBE_PHYSICAL_LAYER_1000BASE_T		0x0002
-#define IXGBE_PHYSICAL_LAYER_100BASE_TX		0x0004
-#define IXGBE_PHYSICAL_LAYER_SFP_PLUS_CU	0x0008
-#define IXGBE_PHYSICAL_LAYER_10GBASE_LR		0x0010
-#define IXGBE_PHYSICAL_LAYER_10GBASE_LRM	0x0020
-#define IXGBE_PHYSICAL_LAYER_10GBASE_SR		0x0040
-#define IXGBE_PHYSICAL_LAYER_10GBASE_KX4	0x0080
-#define IXGBE_PHYSICAL_LAYER_10GBASE_CX4	0x0100
-#define IXGBE_PHYSICAL_LAYER_1000BASE_KX	0x0200
-#define IXGBE_PHYSICAL_LAYER_1000BASE_BX	0x0400
-#define IXGBE_PHYSICAL_LAYER_10GBASE_KR		0x0800
-#define IXGBE_PHYSICAL_LAYER_10GBASE_XAUI	0x1000
-#define IXGBE_PHYSICAL_LAYER_SFP_ACTIVE_DA	0x2000
-#define IXGBE_PHYSICAL_LAYER_1000BASE_SX	0x4000
-#define IXGBE_PHYSICAL_LAYER_10BASE_T		0x8000
+#define IXGBE_PHYSICAL_LAYER_10GBASE_T		0x00001
+#define IXGBE_PHYSICAL_LAYER_1000BASE_T		0x00002
+#define IXGBE_PHYSICAL_LAYER_100BASE_TX		0x00004
+#define IXGBE_PHYSICAL_LAYER_SFP_PLUS_CU	0x00008
+#define IXGBE_PHYSICAL_LAYER_10GBASE_LR		0x00010
+#define IXGBE_PHYSICAL_LAYER_10GBASE_LRM	0x00020
+#define IXGBE_PHYSICAL_LAYER_10GBASE_SR		0x00040
+#define IXGBE_PHYSICAL_LAYER_10GBASE_KX4	0x00080
+#define IXGBE_PHYSICAL_LAYER_10GBASE_CX4	0x00100
+#define IXGBE_PHYSICAL_LAYER_1000BASE_KX	0x00200
+#define IXGBE_PHYSICAL_LAYER_1000BASE_BX	0x00400
+#define IXGBE_PHYSICAL_LAYER_10GBASE_KR		0x00800
+#define IXGBE_PHYSICAL_LAYER_10GBASE_XAUI	0x01000
+#define IXGBE_PHYSICAL_LAYER_SFP_ACTIVE_DA	0x02000
+#define IXGBE_PHYSICAL_LAYER_1000BASE_SX	0x04000
+#define IXGBE_PHYSICAL_LAYER_10BASE_T		0x08000
+#define IXGBE_PHYSICAL_LAYER_2500BASE_KX	0x10000
 
 /* Flow Control Data Sheet defined values
  * Calculation and defines taken from 802.1bb Annex O
@@ -3649,6 +3647,7 @@ enum ixgbe_phy_type {
 	ixgbe_phy_x550em_kx4,
 	ixgbe_phy_x550em_xfi,
 	ixgbe_phy_x550em_ext_t,
+	ixgbe_phy_ext_1g_t,
 	ixgbe_phy_cu_unknown,
 	ixgbe_phy_qt,
 	ixgbe_phy_xaui,
@@ -3905,7 +3904,7 @@ struct ixgbe_mac_operations {
 	s32 (*start_hw)(struct ixgbe_hw *);
 	s32 (*clear_hw_cntrs)(struct ixgbe_hw *);
 	enum ixgbe_media_type (*get_media_type)(struct ixgbe_hw *);
-	u32 (*get_supported_physical_layer)(struct ixgbe_hw *);
+	u64 (*get_supported_physical_layer)(struct ixgbe_hw *);
 	s32 (*get_mac_addr)(struct ixgbe_hw *, u8 *);
 	s32 (*get_san_mac_addr)(struct ixgbe_hw *, u8 *);
 	s32 (*set_san_mac_addr)(struct ixgbe_hw *, u8 *);
@@ -4168,12 +4167,6 @@ struct ixgbe_hw {
 	bool allow_unsupported_sfp;
 	bool wol_enabled;
 	bool need_crosstalk_fix;
-#ifdef HAVE_PF_RING
-	struct {
-		bool has_hw_ts_card;
-		u32 last_9_bytes_ts_sec;
-	} silicom;
-#endif
 };
 
 #define ixgbe_call_func(hw, func, params, error) \

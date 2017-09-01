@@ -1,5 +1,5 @@
 /* Intel(R) Ethernet Switch Host Interface Driver
- * Copyright(c) 2013 - 2016 Intel Corporation.
+ * Copyright(c) 2013 - 2017 Intel Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -68,7 +68,7 @@ static void fm10k_uio_irq_task(struct work_struct *work)
 	interface = container_of(work, struct fm10k_intfc, uio_task);
 
 	/* if the interface is resetting, just re-queue */
-	if (test_bit(__FM10K_RESETTING, &interface->state)) {
+	if (test_bit(__FM10K_RESETTING, interface->state)) {
 		queue_work(fm10k_workqueue, &interface->uio_task);
 		return;
 	}
@@ -97,7 +97,7 @@ int fm10k_uio_request_irq(struct fm10k_intfc *interface)
 	struct fm10k_hw *hw = &interface->hw;
 	int err;
 
-	if (!(interface->flags & FM10K_UIO_REGISTERED))
+	if (!test_bit(FM10K_FLAG_UIO_REGISTERED, interface->flags))
 		return 0;
 
 	/* request the IRQ */
@@ -124,7 +124,7 @@ void fm10k_uio_free_irq(struct fm10k_intfc *interface)
 	struct fm10k_hw *hw = &interface->hw;
 	struct msix_entry *entry;
 
-	if (!(interface->flags & FM10K_UIO_REGISTERED))
+	if (!test_bit(FM10K_FLAG_UIO_REGISTERED, interface->flags))
 		return;
 
 	/* no uio IRQ to free if MSI-X is not enabled */
@@ -204,7 +204,7 @@ int fm10k_uio_probe(struct fm10k_intfc *interface)
 	/* Enable bits in EIMR register */
 	fm10k_write_reg(hw, FM10K_EIMR, FM10K_EIMR_ENABLE(SWITCHINTERRUPT));
 
-	interface->flags |= FM10K_UIO_REGISTERED;
+	set_bit(FM10K_FLAG_UIO_REGISTERED, interface->flags);
 
 	return 0;
 }
@@ -213,10 +213,11 @@ void fm10k_uio_remove(struct fm10k_intfc *interface)
 {
 	struct uio_info *uio = &interface->uio;
 
-	if (!(interface->flags & FM10K_UIO_REGISTERED))
+	fm10k_uio_free_irq(interface);
+
+	if (!test_and_clear_bit(FM10K_FLAG_UIO_REGISTERED, interface->flags))
 		return;
 
-	fm10k_uio_free_irq(interface);
 	uio_unregister_device(uio);
 
 	cancel_work_sync(&interface->uio_task);

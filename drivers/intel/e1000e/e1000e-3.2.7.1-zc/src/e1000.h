@@ -1,5 +1,5 @@
 /* Intel PRO/1000 Linux driver
- * Copyright(c) 1999 - 2015 Intel Corporation.
+ * Copyright(c) 1999 - 2017 Intel Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -79,13 +79,6 @@ struct e1000_info;
 #define E1000_MAX_RXD			4096
 #define E1000_MIN_RXD			64
 
-#ifdef HAVE_PF_RING
-#undef E1000_DEFAULT_TXD
-#define E1000_DEFAULT_TXD		4096
-#undef E1000_DEFAULT_RXD
-#define E1000_DEFAULT_RXD		4096
-#endif
-
 #define E1000_MIN_ITR_USECS		10 /* 100000 irq/sec */
 #define E1000_MAX_ITR_USECS		10000 /* 100    irq/sec */
 
@@ -125,18 +118,18 @@ struct e1000_info;
 #define E1000_TXDCTL_DMA_BURST_ENABLE                          \
 	(E1000_TXDCTL_GRAN | /* set descriptor granularity */  \
 	 E1000_TXDCTL_COUNT_DESC |                             \
-	 (1 << 16) | /* wthresh must be +1 more than desired */\
-	 (1 << 8)  | /* hthresh */                             \
+	 (1u << 16) | /* wthresh must be +1 more than desired */\
+	 (1u << 8)  | /* hthresh */                             \
 	 0x1f)       /* pthresh */
 
 #define E1000_RXDCTL_DMA_BURST_ENABLE                          \
 	(0x01000000 | /* set descriptor granularity */         \
-	 (4 << 16)  | /* set writeback threshold    */         \
-	 (4 << 8)   | /* set prefetch threshold     */         \
+	 (4u << 16) | /* set writeback threshold    */         \
+	 (4u << 8)  | /* set prefetch threshold     */         \
 	 0x20)        /* set hthresh                */
 
-#define E1000_TIDV_FPD (1 << 31)
-#define E1000_RDTR_FPD (1 << 31)
+#define E1000_TIDV_FPD BIT(31)
+#define E1000_RDTR_FPD BIT(31)
 
 enum e1000_boards {
 	board_82571,
@@ -151,7 +144,7 @@ enum e1000_boards {
 	board_pchlan,
 	board_pch2lan,
 	board_pch_lpt,
-	board_pch_spt
+	board_pch_spt,
 };
 
 struct e1000_ps_page {
@@ -207,12 +200,6 @@ struct e1000_ring {
 	int set_itr;
 
 	struct sk_buff *rx_skb_top;
-
-#ifdef HAVE_PF_RING
-	struct {
-		atomic_t queue_in_use;
-	} pfring_zc;
-#endif
 };
 
 #ifdef SIOCGMIIPHY
@@ -418,15 +405,8 @@ struct e1000_adapter {
 #elif defined(HAVE_PM_QOS_REQUEST_LIST)
 	struct pm_qos_request_list pm_qos_req;
 #endif
+	s32 ptp_delta;
 	u16 eee_advert;
-
-#ifdef HAVE_PF_RING
-	struct {
-		wait_queue_head_t packet_waitqueue;
-		u_int8_t interrupt_received, interrupt_enabled;
-		atomic_t usage_counter;
-	} pfring_zc;
-#endif
 };
 
 struct e1000_info {
@@ -458,18 +438,19 @@ s32 e1000e_get_base_timinca(struct e1000_adapter *adapter, u32 *timinca);
  * INCVALUE_n into the TIMINCA register allowing 32+8+(24-INCVALUE_SHIFT_n)
  * bits to count nanoseconds leaving the rest for fractional nonseconds.
  */
-#define INCVALUE_96MHz		125
-#define INCVALUE_SHIFT_96MHz	17
-#define INCPERIOD_SHIFT_96MHz	2
-#define INCPERIOD_96MHz		(12 >> INCPERIOD_SHIFT_96MHz)
+#define INCVALUE_96MHZ		125
+#define INCVALUE_SHIFT_96MHZ	17
+#define INCPERIOD_SHIFT_96MHZ	2
+#define INCPERIOD_96MHZ		(12 >> INCPERIOD_SHIFT_96MHZ)
 
-#define INCVALUE_25MHz		40
-#define INCVALUE_SHIFT_25MHz	18
-#define INCPERIOD_25MHz		1
+#define INCVALUE_25MHZ		40
+#define INCVALUE_SHIFT_25MHZ	18
+#define INCPERIOD_25MHZ		1
 
-#define INCVALUE_24MHz		125
-#define INCVALUE_SHIFT_24MHz	14
-#define INCPERIOD_24MHz		3
+#define INCVALUE_24MHZ		125
+#define INCVALUE_SHIFT_24MHZ	14
+#define INCPERIOD_24MHZ		3
+
 
 /* Another drawback of scaling the incvalue by a large factor is the
  * 64-bit SYSTIM register overflows more quickly.  This is dealt with
@@ -486,57 +467,58 @@ s32 e1000e_get_base_timinca(struct e1000_adapter *adapter, u32 *timinca);
 #endif /* HAVE_HW_TIME_STAMP */
 
 /* hardware capability, feature, and workaround flags */
-#define FLAG_HAS_AMT                      (1 << 0)
-#define FLAG_HAS_FLASH                    (1 << 1)
-#define FLAG_HAS_HW_VLAN_FILTER           (1 << 2)
-#define FLAG_HAS_WOL                      (1 << 3)
-/* reserved bit4 */
-#define FLAG_HAS_CTRLEXT_ON_LOAD          (1 << 5)
-#define FLAG_HAS_SWSM_ON_LOAD             (1 << 6)
-#define FLAG_HAS_JUMBO_FRAMES             (1 << 7)
-/* reserved bit8 */
-#define FLAG_IS_ICH                       (1 << 9)
-#define FLAG_HAS_MSIX                     (1 << 10)
-#define FLAG_HAS_SMART_POWER_DOWN         (1 << 11)
-#define FLAG_IS_QUAD_PORT_A               (1 << 12)
-#define FLAG_IS_QUAD_PORT                 (1 << 13)
-#define FLAG_HAS_HW_TIMESTAMP             (1 << 14)
-#define FLAG_APME_IN_WUC                  (1 << 15)
-#define FLAG_APME_IN_CTRL3                (1 << 16)
-#define FLAG_APME_CHECK_PORT_B            (1 << 17)
-#define FLAG_DISABLE_FC_PAUSE_TIME        (1 << 18)
-#define FLAG_NO_WAKE_UCAST                (1 << 19)
-#define FLAG_MNG_PT_ENABLED               (1 << 20)
-#define FLAG_RESET_OVERWRITES_LAA         (1 << 21)
-#define FLAG_TARC_SPEED_MODE_BIT          (1 << 22)
-#define FLAG_TARC_SET_BIT_ZERO            (1 << 23)
-#define FLAG_RX_NEEDS_RESTART             (1 << 24)
-#define FLAG_LSC_GIG_SPEED_DROP           (1 << 25)
-#define FLAG_SMART_POWER_DOWN             (1 << 26)
-#define FLAG_MSI_ENABLED                  (1 << 27)
+#define FLAG_HAS_AMT                      BIT(0)
+#define FLAG_HAS_FLASH                    BIT(1)
+#define FLAG_HAS_HW_VLAN_FILTER           BIT(2)
+#define FLAG_HAS_WOL                      BIT(3)
+/* reserved BIT(4) */
+#define FLAG_HAS_CTRLEXT_ON_LOAD          BIT(5)
+#define FLAG_HAS_SWSM_ON_LOAD             BIT(6)
+#define FLAG_HAS_JUMBO_FRAMES             BIT(7)
+/* reserved BIT(8) */
+#define FLAG_IS_ICH                       BIT(9)
+#define FLAG_HAS_MSIX                     BIT(10)
+#define FLAG_HAS_SMART_POWER_DOWN         BIT(11)
+#define FLAG_IS_QUAD_PORT_A               BIT(12)
+#define FLAG_IS_QUAD_PORT                 BIT(13)
+#define FLAG_HAS_HW_TIMESTAMP             BIT(14)
+#define FLAG_APME_IN_WUC                  BIT(15)
+#define FLAG_APME_IN_CTRL3                BIT(16)
+#define FLAG_APME_CHECK_PORT_B            BIT(17)
+#define FLAG_DISABLE_FC_PAUSE_TIME        BIT(18)
+#define FLAG_NO_WAKE_UCAST                BIT(19)
+#define FLAG_MNG_PT_ENABLED               BIT(20)
+#define FLAG_RESET_OVERWRITES_LAA         BIT(21)
+#define FLAG_TARC_SPEED_MODE_BIT          BIT(22)
+#define FLAG_TARC_SET_BIT_ZERO            BIT(23)
+#define FLAG_RX_NEEDS_RESTART             BIT(24)
+#define FLAG_LSC_GIG_SPEED_DROP           BIT(25)
+#define FLAG_SMART_POWER_DOWN             BIT(26)
+#define FLAG_MSI_ENABLED                  BIT(27)
 #ifndef HAVE_NDO_SET_FEATURES
-#define FLAG_RX_CSUM_ENABLED              (1 << 28)
+#define FLAG_RX_CSUM_ENABLED              BIT(28)
 #else
-/* reserved (1 << 28) */
+/* reserved BIT(28) */
 #endif
-#define FLAG_TSO_FORCE                    (1 << 29)
-#define FLAG_RESTART_NOW                  (1 << 30)
-#define FLAG_MSI_TEST_FAILED              (1 << 31)
+#define FLAG_TSO_FORCE                    BIT(29)
+#define FLAG_RESTART_NOW                  BIT(30)
+#define FLAG_MSI_TEST_FAILED              BIT(31)
 
-#define FLAG2_CRC_STRIPPING               (1 << 0)
-#define FLAG2_HAS_PHY_WAKEUP              (1 << 1)
-#define FLAG2_IS_DISCARDING               (1 << 2)
-#define FLAG2_DISABLE_ASPM_L1             (1 << 3)
-#define FLAG2_HAS_PHY_STATS               (1 << 4)
-#define FLAG2_HAS_EEE                     (1 << 5)
-#define FLAG2_DMA_BURST                   (1 << 6)
-#define FLAG2_DISABLE_ASPM_L0S            (1 << 7)
-#define FLAG2_DISABLE_AIM                 (1 << 8)
-#define FLAG2_CHECK_PHY_HANG              (1 << 9)
-#define FLAG2_NO_DISABLE_RX               (1 << 10)
-#define FLAG2_PCIM2PCI_ARBITER_WA         (1 << 11)
-#define FLAG2_DFLT_CRC_STRIPPING          (1 << 12)
-#define FLAG2_CHECK_RX_HWTSTAMP           (1 << 13)
+#define FLAG2_CRC_STRIPPING               BIT(0)
+#define FLAG2_HAS_PHY_WAKEUP              BIT(1)
+#define FLAG2_IS_DISCARDING               BIT(2)
+#define FLAG2_DISABLE_ASPM_L1             BIT(3)
+#define FLAG2_HAS_PHY_STATS               BIT(4)
+#define FLAG2_HAS_EEE                     BIT(5)
+#define FLAG2_DMA_BURST                   BIT(6)
+#define FLAG2_DISABLE_ASPM_L0S            BIT(7)
+#define FLAG2_DISABLE_AIM                 BIT(8)
+#define FLAG2_CHECK_PHY_HANG              BIT(9)
+#define FLAG2_NO_DISABLE_RX               BIT(10)
+#define FLAG2_PCIM2PCI_ARBITER_WA         BIT(11)
+#define FLAG2_DFLT_CRC_STRIPPING          BIT(12)
+#define FLAG2_CHECK_RX_HWTSTAMP           BIT(13)
+#define FLAG2_CHECK_SYSTIM_OVERFLOW       BIT(14)
 
 #define E1000_RX_DESC_PS(R, i)	    \
 	(&(((union e1000_rx_desc_packet_split *)((R).desc))[i]))
@@ -573,7 +555,9 @@ extern void e1000e_led_blink_task(struct work_struct *work);
 extern int ethtool_ioctl(struct ifreq *ifr);
 #endif
 
-int e1000e_up(struct e1000_adapter *adapter);
+int e1000e_open(struct net_device *netdev);
+int e1000e_close(struct net_device *netdev);
+void e1000e_up(struct e1000_adapter *adapter);
 void e1000e_down(struct e1000_adapter *adapter, bool reset);
 void e1000e_reinit_locked(struct e1000_adapter *adapter);
 void e1000e_reset(struct e1000_adapter *adapter);
@@ -583,8 +567,13 @@ int e1000e_setup_tx_resources(struct e1000_ring *ring);
 void e1000e_free_rx_resources(struct e1000_ring *ring);
 void e1000e_free_tx_resources(struct e1000_ring *ring);
 #ifdef HAVE_NDO_GET_STATS64
+#ifdef HAVE_VOID_NDO_GET_STATS64
+void e1000e_get_stats64(struct net_device *netdev,
+			struct rtnl_link_stats64 *stats);
+#else
 struct rtnl_link_stats64 *e1000e_get_stats64(struct net_device *netdev,
 					     struct rtnl_link_stats64 *stats);
+#endif /* HAVE_VOID_NDO_GET_STATS64 */
 #else /* HAVE_NDO_GET_STATS64 */
 extern void e1000e_update_stats(struct e1000_adapter *adapter);
 #endif /* HAVE_NDO_GET_STATS64 */

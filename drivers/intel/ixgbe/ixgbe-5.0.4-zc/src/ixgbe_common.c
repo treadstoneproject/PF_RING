@@ -180,7 +180,10 @@ bool ixgbe_device_supports_autoneg_fc(struct ixgbe_hw *hw)
 
 		break;
 	case ixgbe_media_type_backplane:
-		supported = true;
+		if (hw->device_id == IXGBE_DEV_ID_X550EM_X_XFI)
+			supported = false;
+		else
+			supported = true;
 		break;
 	case ixgbe_media_type_copper:
 		/* only some copper devices support flow control autoneg */
@@ -252,7 +255,7 @@ s32 ixgbe_setup_fc_generic(struct ixgbe_hw *hw)
 		if (ret_val != IXGBE_SUCCESS)
 			goto out;
 
-		/* only backplane uses autoc so fall though */
+		/* fall through - only backplane uses autoc */
 	case ixgbe_media_type_fiber_qsfp:
 	case ixgbe_media_type_fiber:
 		reg = IXGBE_READ_REG(hw, IXGBE_PCS1GANA);
@@ -401,8 +404,10 @@ s32 ixgbe_start_hw_generic(struct ixgbe_hw *hw)
 
 	/* Setup flow control */
 	ret_val = ixgbe_setup_fc(hw);
-	if (ret_val != IXGBE_SUCCESS && ret_val != IXGBE_NOT_IMPLEMENTED)
+	if (ret_val != IXGBE_SUCCESS && ret_val != IXGBE_NOT_IMPLEMENTED) {
+		DEBUGOUT1("Flow control setup failed, returning %d\n", ret_val);
 		return ret_val;
+	}
 
 	/* Cache bit indicating need for crosstalk fix */
 	switch (hw->mac.type) {
@@ -484,13 +489,17 @@ s32 ixgbe_init_hw_generic(struct ixgbe_hw *hw)
 	/* Reset the hardware */
 	status = hw->mac.ops.reset_hw(hw);
 
-	if (status == IXGBE_SUCCESS) {
+	if (status == IXGBE_SUCCESS || status == IXGBE_ERR_SFP_NOT_PRESENT) {
 		/* Start the HW */
 		status = hw->mac.ops.start_hw(hw);
 	}
 
 	/* Initialize the LED link active for LED blink support */
-	hw->mac.ops.init_led_link_act(hw);
+	if (hw->mac.ops.init_led_link_act)
+		hw->mac.ops.init_led_link_act(hw);
+
+	if (status != IXGBE_SUCCESS)
+		DEBUGOUT1("Failed to initialize HW, STATUS = %d\n", status);
 
 	return status;
 }
@@ -4455,7 +4464,7 @@ void ixgbe_set_rxpba_generic(struct ixgbe_hw *hw, int num_pb, u32 headroom,
 		rxpktsize <<= IXGBE_RXPBSIZE_SHIFT;
 		for (; i < (num_pb / 2); i++)
 			IXGBE_WRITE_REG(hw, IXGBE_RXPBSIZE(i), rxpktsize);
-		/* Fall through to configure remaining packet buffers */
+		/* fall through - configure remaining packet buffers */
 	case PBA_STRATEGY_EQUAL:
 		rxpktsize = (pbsize / (num_pb - i)) << IXGBE_RXPBSIZE_SHIFT;
 		for (; i < num_pb; i++)
@@ -4709,6 +4718,117 @@ eeprom_err:
 	ERROR_REPORT2(IXGBE_ERROR_INVALID_STATE,
 		      "eeprom read at offset %d failed", offset);
 	return IXGBE_NOT_IMPLEMENTED;
+}
+
+/**
+ *  ixgbe_get_orom_version - Return option ROM from EEPROM
+ *
+ *  @hw: pointer to hardware structure
+ *  @nvm_ver: pointer to output structure
+ *
+ *  if valid option ROM version, nvm_ver->or_valid set to true
+ *  else nvm_ver->or_valid is false.
+ **/
+void ixgbe_get_orom_version(struct ixgbe_hw *hw,
+			    struct ixgbe_nvm_version *nvm_ver)
+{
+	u16 offset, eeprom_cfg_blkh, eeprom_cfg_blkl;
+
+	nvm_ver->or_valid = false;
+	/* Option Rom may or may not be present.  Start with pointer */
+	hw->eeprom.ops.read(hw, NVM_OROM_OFFSET, &offset);
+
+	/* make sure offset is valid */
+	if ((offset == 0x0) || (offset == NVM_INVALID_PTR))
+		return;
+
+	hw->eeprom.ops.read(hw, offset + NVM_OROM_BLK_HI, &eeprom_cfg_blkh);
+	hw->eeprom.ops.read(hw, offset + NVM_OROM_BLK_LOW, &eeprom_cfg_blkl);
+
+	/* option rom exists and is valid */
+	if ((eeprom_cfg_blkl | eeprom_cfg_blkh) == 0x0 ||
+	    eeprom_cfg_blkl == NVM_VER_INVALID ||
+	    eeprom_cfg_blkh == NVM_VER_INVALID)
+		return;
+
+	nvm_ver->or_valid = true;
+	nvm_ver->or_major = eeprom_cfg_blkl >> NVM_OROM_SHIFT;
+	nvm_ver->or_build = (eeprom_cfg_blkl << NVM_OROM_SHIFT) |
+			    (eeprom_cfg_blkh >> NVM_OROM_SHIFT);
+	nvm_ver->or_patch = eeprom_cfg_blkh & NVM_OROM_PATCH_MASK;
+}
+
+/**
+ *  ixgbe_get_oem_prod_version - Return OEM Product version
+ *
+ *  @hw: pointer to hardware structure
+ *  @nvm_ver: pointer to output structure
+ *
+ *  if valid OEM product version, nvm_ver->oem_valid set to true
+ *  else nvm_ver->oem_valid is false.
+ **/
+void ixgbe_get_oem_prod_version(struct ixgbe_hw *hw,
+				struct ixgbe_nvm_version *nvm_ver)
+{
+	u16 rel_num, prod_ver, mod_len, cap, offset;
+
+	nvm_ver->oem_valid = false;
+	hw->eeprom.ops.read(hw, NVM_OEM_PROD_VER_PTR, &offset);
+
+	/* Return is offset to OEM Product Version block is invalid */
+	if (offset == 0x0 && offset == NVM_INVALID_PTR)
+		return;
+
+	/* Read product version block */
+	hw->eeprom.ops.read(hw, offset, &mod_len);
+	hw->eeprom.ops.read(hw, offset + NVM_OEM_PROD_VER_CAP_OFF, &cap);
+
+	/* Return if OEM product version block is invalid */
+	if (mod_len != NVM_OEM_PROD_VER_MOD_LEN ||
+	    (cap & NVM_OEM_PROD_VER_CAP_MASK) != 0x0)
+		return;
+
+	hw->eeprom.ops.read(hw, offset + NVM_OEM_PROD_VER_OFF_L, &prod_ver);
+	hw->eeprom.ops.read(hw, offset + NVM_OEM_PROD_VER_OFF_H, &rel_num);
+
+	/* Return if version is invalid */
+	if ((rel_num | prod_ver) == 0x0 ||
+	    rel_num == NVM_VER_INVALID || prod_ver == NVM_VER_INVALID)
+		return;
+
+	nvm_ver->oem_major = prod_ver >> NVM_VER_SHIFT;
+	nvm_ver->oem_minor = prod_ver & NVM_VER_MASK;
+	nvm_ver->oem_release = rel_num;
+	nvm_ver->oem_valid = true;
+}
+
+/**
+ *  ixgbe_get_etk_id - Return Etrack ID from EEPROM
+ *
+ *  @hw: pointer to hardware structure
+ *  @nvm_ver: pointer to output structure
+ *
+ *  word read errors will return 0xFFFF
+ **/
+void ixgbe_get_etk_id(struct ixgbe_hw *hw, struct ixgbe_nvm_version *nvm_ver)
+{
+	u16 etk_id_l, etk_id_h;
+
+	if (hw->eeprom.ops.read(hw, NVM_ETK_OFF_LOW, &etk_id_l))
+		etk_id_l = NVM_VER_INVALID;
+	if (hw->eeprom.ops.read(hw, NVM_ETK_OFF_HI, &etk_id_h))
+		etk_id_h = NVM_VER_INVALID;
+
+	/* The word order for the version format is determined by high order
+	 * word bit 15.
+	 */
+	if ((etk_id_h & NVM_ETK_VALID) == 0) {
+		nvm_ver->etk_id = etk_id_h;
+		nvm_ver->etk_id |= (etk_id_l << NVM_ETK_SHIFT);
+	} else {
+		nvm_ver->etk_id = etk_id_l;
+		nvm_ver->etk_id |= (etk_id_h << NVM_ETK_SHIFT);
+	}
 }
 
 /**

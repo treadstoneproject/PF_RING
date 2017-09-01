@@ -1,5 +1,5 @@
 /* Intel(R) Ethernet Switch Host Interface Driver
- * Copyright(c) 2013 - 2016 Intel Corporation.
+ * Copyright(c) 2013 - 2017 Intel Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -225,11 +225,6 @@ struct fm10k_hw;
 #define FM10K_STATS_LOOPBACK_DROP	0x3806
 #define FM10K_STATS_NODESC_DROP		0x3807
 
-/* Timesync registers */
-#define FM10K_SYSTIME		0x3814
-#define FM10K_SYSTIME_CFG	0x3818
-#define FM10K_SYSTIME_CFG_STEP_MASK		0x0000000F
-
 /* PCIe state registers */
 #define FM10K_PHYADDR		0x381C
 
@@ -363,12 +358,10 @@ struct fm10k_hw;
 #define FM10K_PFVFLRE(_n)	((0x1 * (_n)) + 0x18844)
 #define FM10K_PFVFLREC(_n)	((0x1 * (_n)) + 0x18846)
 
-/* Defines for size of uncacheable and write-combining memories */
+/* Defines for size of uncacheable memories */
 #define FM10K_UC_ADDR_START	0x000000	/* start of standard regs */
-#define FM10K_WC_ADDR_START	0x100000	/* start of Tx Desc Cache */
-#define FM10K_DBI_ADDR_START	0x200000	/* start of debug registers */
-#define FM10K_UC_ADDR_SIZE	(FM10K_WC_ADDR_START - FM10K_UC_ADDR_START)
-#define FM10K_WC_ADDR_SIZE	(FM10K_DBI_ADDR_START - FM10K_WC_ADDR_START)
+#define FM10K_UC_ADDR_END	0x100000	/* end of standard regs */
+#define FM10K_UC_ADDR_SIZE	(FM10K_UC_ADDR_END - FM10K_UC_ADDR_START)
 
 /* Define timeouts for resets and disables */
 #define FM10K_QUEUE_DISABLE_TIMEOUT		100
@@ -537,6 +530,7 @@ struct fm10k_mac_ops {
 	s32 (*stop_hw)(struct fm10k_hw *);
 	s32 (*get_bus_info)(struct fm10k_hw *);
 	s32 (*get_host_state)(struct fm10k_hw *, bool *);
+	s32 (*request_lport_map)(struct fm10k_hw *);
 	s32 (*update_vlan)(struct fm10k_hw *, u32, u8, bool);
 	s32 (*read_mac_addr)(struct fm10k_hw *);
 	s32 (*update_uc_addr)(struct fm10k_hw *, u16, const u8 *,
@@ -573,6 +567,7 @@ struct fm10k_mac_info {
 	bool tx_ready;
 	u32 dglort_map;
 	u8 itr_scale;
+	u64 reset_while_pending;
 };
 
 struct fm10k_swapi_table_info {
@@ -614,7 +609,6 @@ struct fm10k_vf_info {
 	u8			vf_flags;	/* flags indicating what modes
 						 * are supported for the port
 						 */
-	bool			trusted;	/* VF trust mode */
 };
 
 #define FM10K_VF_FLAG_ALLMULTI_CAPABLE	(u8)(BIT(FM10K_XCAST_MODE_ALLMULTI))

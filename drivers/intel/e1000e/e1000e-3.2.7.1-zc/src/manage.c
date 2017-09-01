@@ -1,5 +1,5 @@
 /* Intel PRO/1000 Linux driver
- * Copyright(c) 1999 - 2015 Intel Corporation.
+ * Copyright(c) 1999 - 2017 Intel Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -35,6 +35,7 @@ static u8 e1000_calculate_checksum(u8 *buffer, u32 length)
 
 	if (!buffer)
 		return 0;
+
 	for (i = 0; i < length; i++)
 		sum += buffer[i];
 
